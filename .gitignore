@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────
+# CoatFlow — .gitignore
+# NOOIT committen: echte secrets & klantdata. Deze horen op
+# Streamlit Cloud in de Secrets-manager, niet in de repo.
+# ─────────────────────────────────────────────────────────────
+
+# Secrets & credentials (ECHTE Supabase-keys) — NOOIT naar GitHub
+.streamlit/secrets.toml
+secrets.toml
+*.env
+.env
+# (secrets.toml.example is een leeg sjabloon en mag wél mee)
+
+# Echte bedrijfs-/klantdata (privacy/AVG) — Supabase is de productie-opslag
+data/
+appdata.json
+
+# Ontwikkel-screenshots (kunnen echte klantnamen/adressen tonen) & losse test-scripts
+*.png
+test_*.py
+verify_*.py
+debug_*.py
+screenshot_*.py
+zoom_*.py
+inspect_*.py
+check_overlap.py
+
+# Python-caches & virtuele omgevingen
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Lokale/agent-artefacten
+.preview_tmp/
+.claude/
+.DS_Store
+Thumbs.db

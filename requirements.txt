@@ -1,0 +1,8 @@
+# CoatFlow — Python dependencies
+streamlit>=1.55
+fpdf2>=2.8
+streamlit-option-menu>=0.4.0
+
+# Database-laag (Fase 1: Supabase PostgreSQL). Optioneel: zonder geconfigureerde
+# secrets valt de app automatisch terug op lokale JSON-opslag.
+supabase>=2.6
