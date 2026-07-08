@@ -35,6 +35,15 @@ try:
 except Exception:
     _DB_OK = False
 
+# Deploy-diagnostiek: log éénmalig of Supabase (dus login) actief is of dat de app op
+# JSON terugvalt. Zichtbaar in Streamlit Cloud → Manage app → Logs; maakt "login werkt
+# niet op de cloud" meteen herleidbaar naar ontbrekende/foutieve secrets.
+if _DB_OK:
+    try:
+        _db.log_startup_diagnostics()
+    except Exception:
+        pass
+
 # Canonieke standaard-instellingen uit de datalaag (db.py heeft alleen stdlib-imports en
 # is dus altijd laadbaar): één bron van waarheid die de app (init_state-merge) deelt met
 # de registratie (auth.sign_up), zodat een nieuw bedrijf altijd een volledig profiel krijgt.

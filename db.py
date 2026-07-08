@@ -94,23 +94,48 @@ _last_hashes: dict[tuple, str] = {}
 
 
 def _secrets():
-    """Het [supabase]-blok uit .streamlit/secrets.toml (genormaliseerd), of None.
+    """De Supabase-configuratie uit st.secrets (genormaliseerd), of None.
 
-    Formaat-agnostisch: werkt zowel met de nieuwe Supabase-sleutels
-    (sb_publishable_… / sb_secret_…) als met de oude JWT-keys — het zijn gewoon
-    strings. Normaliseert spaties en een per ongeluk meegekopieerde '/rest/v1/'
-    achter de project-URL, zodat de client altijd het juiste eindpunt gebruikt.
+    Formaat-agnostisch:
+    - Werkt zowel met de nieuwe Supabase-sleutels (sb_publishable_… / sb_secret_…)
+      als met de oude JWT-keys — het zijn gewoon strings.
+    - Accepteert de keys zowel GENEST onder een `[supabase]`-blok (aanbevolen) ALS
+      los op root-niveau. Dat laatste vangt de meest gemaakte fout op in de Streamlit
+      Cloud Secrets-manager: het `[supabase]`-kopje vergeten te plakken. Zonder deze
+      terugval werd dan alles stil op JSON-modus gezet ("login werkt niet").
+    - Normaliseert spaties en een per ongeluk meegekopieerde '/rest/v1/' achter de
+      project-URL, zodat de client altijd het juiste eindpunt gebruikt.
+
+    Een parse-/leesfout wordt naar de serverlog geprint (zichtbaar in Streamlit Cloud
+    → Manage app → Logs), zodat een kapot secrets-blok herleidbaar is i.p.v. stil.
     """
     try:
         import streamlit as st
-        raw = st.secrets.get("supabase", None)
+        # 1) Bij voorkeur genest onder [supabase].
+        raw = None
+        try:
+            raw = st.secrets.get("supabase", None)
+        except Exception:
+            raw = None
+        # 2) Terugval: keys los op root-niveau (vergeten [supabase]-kopje).
+        if not raw:
+            try:
+                if "supabase_url" in st.secrets:
+                    raw = st.secrets
+            except Exception:
+                raw = None
         if not raw:
             return None
-        out = {}
-        for k in ("supabase_url", "supabase_service_key",
-                  "supabase_anon_key", "default_company_id"):
-            v = raw.get(k, None)
-            out[k] = v.strip() if isinstance(v, str) else v
+
+        def _pick(key):
+            try:
+                v = raw.get(key, None)
+            except Exception:
+                v = None
+            return v.strip() if isinstance(v, str) else v
+
+        out = {k: _pick(k) for k in ("supabase_url", "supabase_service_key",
+                                     "supabase_anon_key", "default_company_id")}
         u = out.get("supabase_url")
         if isinstance(u, str) and u:
             u = u.rstrip("/")
@@ -118,7 +143,8 @@ def _secrets():
                 u = u[: -len("/rest/v1")]
             out["supabase_url"] = u
         return out
-    except Exception:
+    except Exception as e:
+        print(f"[CoatFlow] Kon Supabase-secrets niet lezen: {e}", flush=True)
         return None
 
 
@@ -126,6 +152,35 @@ def is_enabled() -> bool:
     """True als Supabase volledig is geconfigureerd (anders draait de app op JSON)."""
     s = _secrets()
     return bool(s and s.get("supabase_url") and s.get("supabase_service_key"))
+
+
+_diag_logged = False
+
+def log_startup_diagnostics():
+    """Print éénmalig de opslagmodus naar de serverlog (Streamlit Cloud → Manage app →
+    Logs). Zo is "login werkt niet op de cloud" meteen herleidbaar: staat Supabase aan,
+    of viel de app stil terug op JSON omdat de secrets ontbreken/onvolledig zijn? Puur
+    diagnostisch — verandert niets aan het gedrag."""
+    global _diag_logged
+    if _diag_logged:
+        return
+    _diag_logged = True
+    try:
+        if is_enabled():
+            print("[CoatFlow] Opslagmodus: Supabase ACTIEF -> login ingeschakeld.", flush=True)
+            return
+        s = _secrets()
+        if not s:
+            print("[CoatFlow] Opslagmodus: lokale JSON -> GEEN login. Geen Supabase-secrets "
+                  "gevonden. Op Streamlit Cloud: 'Manage app -> Settings -> Secrets' en plak een "
+                  "[supabase]-blok met supabase_url, supabase_service_key (+ supabase_anon_key).",
+                  flush=True)
+        else:
+            mist = [k for k in ("supabase_url", "supabase_service_key") if not s.get(k)]
+            print("[CoatFlow] Opslagmodus: lokale JSON -> GEEN login. Supabase-secrets "
+                  "onvolledig - ontbrekend/leeg: " + str(mist) + ".", flush=True)
+    except Exception as e:
+        print("[CoatFlow] Startup-diagnostiek faalde: " + str(e), flush=True)
 
 
 def _get_client():
