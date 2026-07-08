@@ -2789,14 +2789,15 @@ html, body, [class*="css"] {
     padding: 6px 14px;
 }
 .stTabs [data-baseweb="tab"]:hover { color: #2563EB; }
-/* Actieve tab = zelfde merk-blauw als de sidebar-navigatie (nav-link-selected),
-   i.p.v. een vlakke witte achtergrond. Consistent op álle pagina's (globale CSS). */
+/* Actieve tab = transparant (toont de tab-list-achtergrond), geen eigen vlak.
+   Alleen de tekst kleurt merk-blauw zodat zichtbaar blijft welke tab actief is.
+   Consistent op álle pagina's (globale CSS). */
 .stTabs [aria-selected="true"] {
-    background-color: #2563EB !important;
-    color: white !important;
-    box-shadow: 0 1px 4px rgba(37,99,235,0.25) !important;
+    background-color: transparent !important;
+    color: #2563EB !important;
+    box-shadow: none !important;
 }
-.stTabs [aria-selected="true"]:hover { color: white !important; }
+.stTabs [aria-selected="true"]:hover { color: #2563EB !important; }
 
 /* ===================== MISC ===================== */
 hr { border: none; border-top: 1px solid #E2E8F0; margin: 16px 0; }
