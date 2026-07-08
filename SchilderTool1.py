@@ -107,9 +107,10 @@ def load_data():
     ook zonder DB-configuratie of bij een verbindingsfout blijft draaien."""
     if _use_db():
         try:
-            # Fase 2: company van de INGELOGDE gebruiker (door de auth-gate gezet).
-            # Terugval op de default company alleen als er (nog) geen login actief is.
-            cid = st.session_state.get("company_id") or _db.default_company_id()
+            # Fase 2: UITSLUITEND de company van de INGELOGDE gebruiker (door de auth-gate
+            # gezet). GEEN terugval meer op de default company — dat zou test-/demodata van
+            # een ander bedrijf lekken en de gebruikersisolatie doorbreken.
+            cid = st.session_state.get("company_id")
             if cid:
                 st.session_state["_company_id"] = cid
                 data = _db.load_company_data(cid)
@@ -557,7 +558,10 @@ def init_state():
         **(st.session_state.get("instellingen") or {}),
     }
 
-    if "producten" not in st.session_state:
+    # Demo-/voorbeelddata wordt ALLEEN in lokale JSON-modus (single-user dev) geseed.
+    # In Supabase-modus (SaaS, ingelogd) nooit → een nieuw/leeg bedrijf krijgt lege
+    # lijsten, geen test-/demodata. Zie ook de setdefault-vangnet vlak vóór _backfill_ids.
+    if "producten" not in st.session_state and not _use_db():
         st.session_state.producten = [
             {"id": 1, "naam": "Sigma Muurverf Wit", "prijs": 28.50, "verbruik": 0.12, "eenheid": "liter", "categorie": "Verf", "werkzaamheden": ["Muren schilderen"]},
             {"id": 2, "naam": "Sigma Houtverf Buiten", "prijs": 34.00, "verbruik": 0.10, "eenheid": "liter", "categorie": "Verf", "werkzaamheden": ["Houtwerk schilderen"]},
@@ -567,19 +571,19 @@ def init_state():
             {"id": 6, "naam": "Schuurpapier (vel)", "prijs": 1.20, "verbruik": 0.50, "eenheid": "vel", "categorie": "Gereedschap", "werkzaamheden": ["Schuren", "Houtwerk schilderen"]},
         ]
 
-    if "personeel" not in st.session_state:
+    if "personeel" not in st.session_state and not _use_db():
         st.session_state.personeel = [
             {"id": 1, "naam": "Jan de Vries", "uurtarief": 52.00, "functie": "Uitvoerder", "telefoon": "06-12345678", "actief": True, "project_ids": []},
             {"id": 2, "naam": "Piet Bakker", "uurtarief": 42.00, "functie": "Schilder", "telefoon": "06-87654321", "actief": True, "project_ids": []},
         ]
 
-    if "klanten" not in st.session_state:
+    if "klanten" not in st.session_state and not _use_db():
         st.session_state.klanten = [
             {"id": 1, "naam": "Familie Jansen", "bedrijf": "", "adres": "Kerkstraat 12", "postcode": "5211 AB", "stad": "Den Bosch", "telefoon": "073-1234567", "email": "jansen@email.nl", "btw_nummer": "", "notities": "Vaste klant"},
             {"id": 2, "naam": "VvE Parkflat", "bedrijf": "VvE Parkflat BV", "adres": "Parkweg 44", "postcode": "5615 GH", "stad": "Eindhoven", "telefoon": "040-9876543", "email": "info@parkflat.nl", "btw_nummer": "NL001234567B01", "notities": "Jaarlijks terugkerend"},
         ]
 
-    if "projecten" not in st.session_state:
+    if "projecten" not in st.session_state and not _use_db():
         st.session_state.projecten = [
             {
                 "id": 1, "naam": "Woonkamer renovatie Jansen", "klant_id": 1,
@@ -610,7 +614,7 @@ def init_state():
             },
         ]
 
-    if "taken" not in st.session_state:
+    if "taken" not in st.session_state and not _use_db():
         st.session_state.taken = [
             {"id": 1, "taak": "Offerte sturen naar Jansen", "klaar": False, "datum": "2025-01-15"},
             {"id": 2, "taak": "Verf bestellen Parkflat", "klaar": True, "datum": "2025-01-12"},
@@ -626,6 +630,12 @@ def init_state():
 
     if "volgende_klant_id" not in st.session_state:
         st.session_state.volgende_klant_id = 3
+
+    # Vangnet (álle modi): zorg dat de kernlijsten bestaan. In Supabase-modus met een
+    # leeg/nieuw bedrijf zijn ze hierboven bewust NIET met demodata gevuld → hier leeg,
+    # zodat de UI nooit op een ontbrekende key crasht (en er géén testdata verschijnt).
+    for _k in ("producten", "personeel", "klanten", "projecten", "taken"):
+        st.session_state.setdefault(_k, [])
 
     # ── BUG-02: records zonder geldig id alsnog een uniek id geven (vóór de
     #    teller-integriteit), zodat id-afhankelijke weergave/PDF niet crasht. ──
@@ -2778,11 +2788,15 @@ html, body, [class*="css"] {
     color: #64748B;
     padding: 6px 14px;
 }
+.stTabs [data-baseweb="tab"]:hover { color: #2563EB; }
+/* Actieve tab = zelfde merk-blauw als de sidebar-navigatie (nav-link-selected),
+   i.p.v. een vlakke witte achtergrond. Consistent op álle pagina's (globale CSS). */
 .stTabs [aria-selected="true"] {
-    background-color: white !important;
-    color: #0F172A !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.09);
+    background-color: #2563EB !important;
+    color: white !important;
+    box-shadow: 0 1px 4px rgba(37,99,235,0.25) !important;
 }
+.stTabs [aria-selected="true"]:hover { color: white !important; }
 
 /* ===================== MISC ===================== */
 hr { border: none; border-top: 1px solid #E2E8F0; margin: 16px 0; }

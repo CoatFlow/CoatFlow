@@ -106,23 +106,11 @@ def _ensure_company(user_id: str, email: str) -> str:
         if r.data:
             return r.data[0]["company_id"]
 
-        # Geen koppeling: eenmalige claim van de gemigreerde default company
-        # (alleen als die een geldige UUID is, écht bestaat, én nog geen eigenaar
-        # heeft). Een lege/placeholder default_company_id wordt genegeerd → vers,
-        # leeg bedrijf i.p.v. een crash.
-        s = db._secrets() or {}
-        default_cid = s.get("default_company_id")
-        if default_cid and _valid_uuid(default_cid):
-            bestaat = svc.table("companies").select("id").eq("id", default_cid).limit(1).execute()
-            if bestaat.data:
-                owned = svc.table("app_users").select("id").eq("company_id", default_cid).limit(1).execute()
-                if not owned.data:
-                    svc.table("app_users").insert({
-                        "id": user_id, "company_id": default_cid,
-                        "email": email, "role": "owner",
-                    }).execute()
-                    return default_cid
-
+        # Geen koppeling → ALTIJD een vers, leeg bedrijf voor deze gebruiker.
+        # (De oude "claim de gemigreerde default company"-logica is bewust VERWIJDERD:
+        # die koppelde de eerste gebruiker aan het gemigreerde test-/demobedrijf, waardoor
+        # die persoon alle oude testdata zag. Nu is elke gebruiker volledig geïsoleerd met
+        # een eigen, leeg bedrijf — géén gedeelde of geërfde data.)
         comp = svc.table("companies").insert({
             "naam": "Mijn bedrijf",
             # Volledig, geldig profiel bij registratie (geen leeg {}), zodat een nieuw
@@ -175,9 +163,14 @@ def _fresh_auth_client():
 def _set_cookie(token: str):
     import json as _j
     import streamlit.components.v1 as _c
-    js = ("<script>try{window.parent.document.cookie='" + _COOKIE + "='+"
-          + _j.dumps(token) + "+'; path=/; max-age=" + str(_COOKIE_MAXAGE)
-          + "; SameSite=Lax';}catch(e){}</script>")
+    # Secure-vlag alleen op HTTPS (productie/Streamlit Cloud); op http://localhost zou
+    # Secure de cookie in sommige browsers weigeren → dev blijft dan werken. SameSite=Lax
+    # zodat de cookie op de eigen (first-party) app-domein bij een refresh wordt meegestuurd.
+    js = ("<script>try{var d=window.parent.document;"
+          "var sec=(window.parent.location.protocol==='https:')?'; Secure':'';"
+          "d.cookie='" + _COOKIE + "='+" + _j.dumps(token)
+          + "+'; path=/; max-age=" + str(_COOKIE_MAXAGE)
+          + "; SameSite=Lax'+sec;}catch(e){}</script>")
     _c.html(js, height=0)
 
 
