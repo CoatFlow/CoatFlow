@@ -160,12 +160,82 @@ def _fresh_auth_client():
     return create_client(s["supabase_url"], key)
 
 
+# ── cookie-transport ─────────────────────────────────────────────────────────
+# We gebruiken streamlit-cookies-controller: die schrijft/leest de cookie via een
+# component-iframe dat op HETZELFDE origin als de app draait. De cookie belandt zo
+# op het app-domein en overleeft een refresh (F5).
+#
+# WAAROM niet de oude aanpak: die deed `window.parent.document.cookie` vanuit een
+# components.html-iframe. Op Streamlit Cloud blokkeert de iframe-sandbox die toegang
+# tot het PARENT-document (cross-frame) → de cookie werd nooit geschreven, dus na een
+# refresh was je uitgelogd. Lokaal werkte het toevallig wél, vandaar dat de bug pas
+# in de cloud zichtbaar werd. De component schrijft in zijn EIGEN same-origin document
+# en heeft die parent-toegang niet nodig. De ruwe JS blijft als terugval bestaan voor
+# het geval de package ontbreekt.
+
+def _cookie_ctrl():
+    """Eén CookieController per rerun. De controller cachet zichzelf in
+    st.session_state, dus meermaals per run instantiëren rendert de component maar
+    één keer (geen dubbele-widget-fout). None als de package ontbreekt → JS-terugval."""
+    try:
+        from streamlit_cookies_controller import CookieController
+        return CookieController(key="cf_cookies")
+    except Exception:
+        return None
+
+
 def _set_cookie(token: str):
+    ctrl = _cookie_ctrl()
+    if ctrl is not None:
+        try:
+            import datetime as _dt
+            # SameSite=Lax + géén Secure: werkt op zowel http://localhost (dev) als
+            # https (cloud); Lax stuurt de cookie mee bij een top-level refresh.
+            ctrl.set(_COOKIE, token,
+                     expires=_dt.datetime.now() + _dt.timedelta(seconds=_COOKIE_MAXAGE),
+                     same_site="lax")
+            return
+        except Exception:
+            pass
+    _set_cookie_js(token)
+
+
+def _clear_cookie():
+    ctrl = _cookie_ctrl()
+    if ctrl is not None:
+        try:
+            if ctrl.get(_COOKIE) is not None:   # remove() raist KeyError als afwezig
+                ctrl.remove(_COOKIE)
+            return
+        except Exception:
+            pass
+    _clear_cookie_js()
+
+
+def _read_cookie():
+    # 1) Native request-cookies: direct beschikbaar op de eerste run (geen extra
+    #    rerun/flash) zodra de cookie op het app-domein staat.
+    try:
+        v = st.context.cookies.get(_COOKIE)
+        if v:
+            return v
+    except Exception:
+        pass
+    # 2) Component-cache: betrouwbaar op Streamlit Cloud waar (1) faalt. Kan één
+    #    extra rerun kosten voordat de waarde beschikbaar is.
+    ctrl = _cookie_ctrl()
+    if ctrl is not None:
+        try:
+            return ctrl.get(_COOKIE)
+        except Exception:
+            return None
+    return None
+
+
+# ── ruwe-JS terugval (alleen als de cookie-component ontbreekt) ───────────────
+def _set_cookie_js(token: str):
     import json as _j
     import streamlit.components.v1 as _c
-    # Secure-vlag alleen op HTTPS (productie/Streamlit Cloud); op http://localhost zou
-    # Secure de cookie in sommige browsers weigeren → dev blijft dan werken. SameSite=Lax
-    # zodat de cookie op de eigen (first-party) app-domein bij een refresh wordt meegestuurd.
     js = ("<script>try{var d=window.parent.document;"
           "var sec=(window.parent.location.protocol==='https:')?'; Secure':'';"
           "d.cookie='" + _COOKIE + "='+" + _j.dumps(token)
@@ -174,17 +244,10 @@ def _set_cookie(token: str):
     _c.html(js, height=0)
 
 
-def _clear_cookie():
+def _clear_cookie_js():
     import streamlit.components.v1 as _c
     _c.html("<script>try{window.parent.document.cookie='" + _COOKIE
             + "=; path=/; max-age=0';}catch(e){}</script>", height=0)
-
-
-def _read_cookie():
-    try:
-        return st.context.cookies.get(_COOKIE)
-    except Exception:
-        return None
 
 
 # ── publieke acties ──────────────────────────────────────────────────────────

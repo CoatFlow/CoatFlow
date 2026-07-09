@@ -3,6 +3,11 @@ streamlit>=1.55
 fpdf2>=2.8
 streamlit-option-menu>=0.4.0
 
+# Persistente login-cookie (onthoud sessie na refresh op Streamlit Cloud).
+# Schrijft/leest de cookie via een same-origin component-iframe — werkt waar de
+# ruwe window.parent.document.cookie-hack door de cloud-sandbox geblokkeerd wordt.
+streamlit-cookies-controller>=0.0.4
+
 # Database-laag (Fase 1: Supabase PostgreSQL). Optioneel: zonder geconfigureerde
 # secrets valt de app automatisch terug op lokale JSON-opslag.
 supabase>=2.6
