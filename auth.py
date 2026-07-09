@@ -204,12 +204,17 @@ def _clear_cookie():
     ctrl = _cookie_ctrl()
     if ctrl is not None:
         try:
-            if ctrl.get(_COOKIE) is not None:   # remove() raist KeyError als afwezig
-                ctrl.remove(_COOKIE)
-            return
+            import datetime as _dt
+            # Betrouwbaarste verwijdering, ongeacht de transient-None-race van v0.0.4:
+            # overschrijf met een reeds-verlopen cookie (leeg + expires in het verleden
+            # + max_age 0). De set-boodschap naar de frontend wordt sowieso verstuurd,
+            # ook als de interne cache None is. remove() gebruiken we bewust niet: dat
+            # raist KeyError als de cookie afwezig is.
+            ctrl.set(_COOKIE, "", path="/", same_site="lax",
+                     expires=_dt.datetime.now() - _dt.timedelta(days=1), max_age=0)
         except Exception:
             pass
-    _clear_cookie_js()
+    _clear_cookie_js()   # extra terugval (lokaal / als de component ontbreekt)
 
 
 def _read_cookie():
@@ -305,9 +310,13 @@ def sign_out():
     except Exception:
         pass  # lokale sessie hieronder altijd opruimen
     _clear_session()
-    # Cookie wordt op de eerstvolgende (login-)render gewist; zo voorkomen we dat
-    # een refresh de zojuist uitgelogde sessie meteen weer herstelt.
-    st.session_state["_force_logout"] = True
+    _clear_cookie()   # browser-cookie meteen verwijderen (F5 na uitloggen blijft uit)
+    # STICKY uitlog-lock: blijft de hele pagina-sessie staan (niet 1 rerun). Reden:
+    # st.context.cookies leest uit de INITIËLE request-headers en die veranderen niet
+    # bij een rerun — na uitloggen staat de oude cookie daar dus nog in. Zonder deze
+    # lock zou try_restore_session() die stale cookie lezen en je meteen weer inloggen.
+    # Alleen een echte page-load (F5) reset session_state → lock weg → verse headers.
+    st.session_state["_logged_out"] = True
 
 
 def try_restore_session():
@@ -315,6 +324,8 @@ def try_restore_session():
     Faalt stil terug naar het inlogscherm; nooit een crash."""
     if st.session_state.get("authenticated"):
         return
+    if st.session_state.get("_logged_out"):
+        return   # expliciet uitgelogd → nooit herstellen (stale-cookie bescherming)
     token = _read_cookie()
     if not token:
         return
@@ -350,6 +361,9 @@ def persist_session():
 # ── sessie-state ─────────────────────────────────────────────────────────────
 def _set_session(user_id, email, company_id, refresh_token=None, access_token=None):
     st.session_state.authenticated = True
+    # een geslaagde login heft de uitlog-lock op (en reset de eenmalige cookie-wis-guard)
+    st.session_state.pop("_logged_out", None)
+    st.session_state.pop("_cookie_cleared", None)
     st.session_state.user_id = user_id
     st.session_state.user_email = email
     st.session_state.company_id = company_id
@@ -377,8 +391,14 @@ def require_auth():
     """Blokkeer de hele app tot de gebruiker is ingelogd."""
     if st.session_state.get("authenticated"):
         return
-    if st.session_state.pop("_force_logout", False):
-        _clear_cookie()      # zojuist uitgelogd → cookie wissen, niet herstellen
+    # Sticky (niet-poppen): zolang deze pagina-sessie draait NOOIT auto-herstellen na
+    # een expliciete uitlog, ook al staat de stale cookie nog in st.context.cookies.
+    if st.session_state.get("_logged_out"):
+        # Cookie precies één keer wissen — de controller-set rendert een component dat
+        # anders elke rerun opnieuw zou vuren (rerun-lus op het loginscherm).
+        if not st.session_state.get("_cookie_cleared"):
+            _clear_cookie()
+            st.session_state["_cookie_cleared"] = True
         _render_login()
         st.stop()
     try_restore_session()    # page-refresh → bewaarde sessie terughalen
