@@ -15,6 +15,18 @@ binnen één default company; Fase 2 (login) zet RLS-isolatie aan via een JWT-cl
 """
 from __future__ import annotations
 
+# SSL: gebruik de OS-certificaatopslag (Windows/macOS/Linux) i.p.v. alleen de
+# certifi-bundel. Nodig op machines waar antivirus/proxy HTTPS onderschept met een
+# eigen root-CA (lokale dev → anders 'CERTIFICATE_VERIFY_FAILED' bij elke Supabase-
+# call). Moet vóór het aanmaken van de supabase/httpx-client draaien. Op Streamlit
+# Cloud is dit een no-op (dezelfde standaard-CA's). Faalt stil terug op certifi als
+# truststore ontbreekt.
+try:
+    import truststore as _truststore
+    _truststore.inject_into_ssl()
+except Exception:
+    pass
+
 import hashlib
 import json
 import threading
@@ -329,16 +341,39 @@ def _anon_client():
         return _anon
 
 
+def _token_has_company_id(tok: str) -> bool:
+    """True als het JWT een 'company_id'-claim bevat (gezet door de Supabase Auth Hook
+    custom_access_token_hook). Alleen-inspectie, geen handtekening-verificatie."""
+    try:
+        import base64, json as _json
+        payload = tok.split(".")[1]
+        payload += "=" * (-len(payload) % 4)          # base64-padding herstellen
+        claims = _json.loads(base64.urlsafe_b64decode(payload))
+        return bool(claims.get("company_id"))
+    except Exception:
+        return False
+
+
 def _jwt_data_client():
     """Anon-client mét het access-token van de ingelogde gebruiker. PostgREST ziet
     dan het user-JWT (met company_id-claim) en RLS dwingt de tenant af. None als er
-    geen token of anon-key is."""
+    geen token of anon-key is.
+
+    KRITISCH voor performance/correctheid: gebruik dit pad ALLEEN als het token echt
+    een company_id-claim heeft. Ontbreekt de claim (Auth Hook niet/verkeerd ingesteld),
+    dan blokkeert RLS élke rij → lege reads + falende writes, en db valt dan alsnog terug
+    op de service_role client. Die verspilde JWT-poging bij ELKE load/save kostte ~1s
+    (round-trip + fout). We slaan 'm nu meteen over → service_role (filtert in code op
+    company_id, dus nog steeds volledig geïsoleerd). Zodra de hook wél werkt, wordt het
+    JWT/RLS-pad vanzelf weer gebruikt."""
     try:
         import streamlit as st
         tok = st.session_state.get("_access_token")
     except Exception:
         tok = None
     if not tok:
+        return None
+    if not _token_has_company_id(tok):
         return None
     cl = _anon_client()
     if cl is None:

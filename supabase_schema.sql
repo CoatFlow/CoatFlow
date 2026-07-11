@@ -304,5 +304,21 @@ create policy tenant_app_users on app_users
     with check (company_id = auth_company_id());
 
 -- ============================================================================
+-- GRANTS  (rol-rechten op de tabellen)
+-- ----------------------------------------------------------------------------
+-- Nodig omdat nieuwe Supabase-projecten (met de nieuwe sb_publishable_/sb_secret_
+-- API-sleutels) de automatische grants op public-tabellen niet altijd zetten →
+-- anders 'permission denied for table' (42501) bij ELKE query, ook met de secret
+-- key (= service_role). RLS blijft de rijen filteren voor anon/authenticated;
+-- service_role heeft BYPASSRLS. Idempotent, veilig te herhalen. Bewust GEEN grant
+-- op functions (de auth-hook wordt in supabase_rls.sql juist afgeschermd).
+-- ============================================================================
+grant usage on schema public to anon, authenticated, service_role;
+grant all on all tables    in schema public to anon, authenticated, service_role;
+grant all on all sequences in schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+
+-- ============================================================================
 -- KLAAR. Default-company + data komen via migrate_json_to_supabase.py.
 -- ============================================================================

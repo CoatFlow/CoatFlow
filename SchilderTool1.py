@@ -3463,7 +3463,14 @@ div[data-testid="stTextInput"] input[placeholder*="Zoek"] {
 # components.html() omzeilt dit door CSS via JS in het parent-document te zetten.
 _BI_CDN = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
 _css_json = json.dumps(_APP_CSS)
-_components.html(
+# PERF: de basis-CSS (~33 KB) verandert NIET tussen reruns. 'm elke rerun opnieuw via
+# een component-iframe injecteren = onnodig 33 KB over de websocket + een volledige
+# style-recalc van de pagina bij ELKE klik (client-side de grootste kostenpost, ~2-3s
+# op Streamlit Cloud). De <style id="sp-css"> die dit script in de document-head zet
+# BLIJFT staan over reruns heen, dus één keer per sessie injecteren volstaat. Bij een
+# echte page-load (F5) reset session_state → wordt 'ie opnieuw gezet.
+if not st.session_state.get("_css_base_done"):
+    _components.html(
     "<script>(function(){"
     "var p=window.parent.document;"
     "var s=p.getElementById('sp-css');"
@@ -3482,7 +3489,8 @@ _components.html(
     "p.addEventListener('invalid',function(e){e.preventDefault();},true);}"
     "})();</script>",
     height=0, scrolling=False
-)
+    )
+    st.session_state["_css_base_done"] = True
 
 
 def _inject_page_css(css):
@@ -3490,6 +3498,12 @@ def _inject_page_css(css):
     Omzeilt het probleem dat <style>-tags in st.markdown() worden gestript
     in nieuwere Streamlit-versies."""
     css_id = "sp-pg-" + hashlib.md5(css.encode()).hexdigest()[:10]
+    # PERF: identieke pagina-CSS niet elke rerun opnieuw injecteren (de <style> blijft
+    # in de head staan). Per sessie per unieke CSS één keer volstaat.
+    _done = st.session_state.setdefault("_css_pg_done", set())
+    if css_id in _done:
+        return
+    _done.add(css_id)
     _components.html(
         "<script>(function(){"
         "var p=window.parent.document;"

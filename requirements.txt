@@ -11,3 +11,8 @@ streamlit-cookies-controller>=0.0.4
 # Database-laag (Fase 1: Supabase PostgreSQL). Optioneel: zonder geconfigureerde
 # secrets valt de app automatisch terug op lokale JSON-opslag.
 supabase>=2.6
+
+# Laat Python de OS-certificaatopslag gebruiken voor HTTPS (Supabase). Voorkomt
+# CERTIFICATE_VERIFY_FAILED achter antivirus/proxy-SSL-onderschepping (lokale dev).
+truststore>=0.9
+
