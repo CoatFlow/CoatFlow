@@ -704,8 +704,6 @@ if _AUTH_OK and _auth.is_active():
     _auth.require_auth()
 
 init_state()
-import time as _rt   # [RERUNTIMER tijdelijk — meet server-side rerun op Cloud-CPU]
-_rt0 = _rt.perf_counter()   # [RERUNTIMER]
 
 # Sessie bewaren (cookie) zodat een page-refresh ingelogd blijft (Fase 2).
 if _AUTH_OK and _auth.is_active():
@@ -9643,14 +9641,3 @@ elif selected == "Admin":
         '<div style="font-size:11.5px;color:#94A3B8;margin-top:18px;display:flex;align-items:center;gap:6px;">'
         '<i class="bi bi-shield-check"></i>Server-side beveiligd · cross-tenant via service_role · '
         'wijzigingen worden direct in Supabase opgeslagen.</div>', unsafe_allow_html=True)
-
-
-# [RERUNTIMER tijdelijk] — meet de SERVER-side rerun-tijd op de Cloud-CPU (module-
-# niveau: draait na de pagina-render, voor elke pagina). Toont een klein regeltje
-# onderaan + logt naar de Streamlit Cloud-logs. Wordt na de diagnose weer verwijderd.
-try:
-    _rt_ms = (_rt.perf_counter() - _rt0) * 1000
-    print(f"[RERUNMS] pagina={selected} server={_rt_ms:.0f}ms", flush=True)
-    st.caption(f"⏱ debug: server-rerun {_rt_ms:.0f} ms")
-except Exception:
-    pass
