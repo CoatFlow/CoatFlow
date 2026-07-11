@@ -15,17 +15,18 @@ binnen één default company; Fase 2 (login) zet RLS-isolatie aan via een JWT-cl
 """
 from __future__ import annotations
 
-# SSL: gebruik de OS-certificaatopslag (Windows/macOS/Linux) i.p.v. alleen de
-# certifi-bundel. Nodig op machines waar antivirus/proxy HTTPS onderschept met een
-# eigen root-CA (lokale dev → anders 'CERTIFICATE_VERIFY_FAILED' bij elke Supabase-
-# call). Moet vóór het aanmaken van de supabase/httpx-client draaien. Op Streamlit
-# Cloud is dit een no-op (dezelfde standaard-CA's). Faalt stil terug op certifi als
-# truststore ontbreekt.
-try:
-    import truststore as _truststore
-    _truststore.inject_into_ssl()
-except Exception:
-    pass
+# SSL: alleen op WINDOWS (lokale dev) de OS-certificaatopslag gebruiken. Daar
+# onderschept antivirus/proxy soms HTTPS met een eigen root-CA → anders
+# 'CERTIFICATE_VERIFY_FAILED' bij elke Supabase-call. Op Linux (Streamlit Cloud) is
+# dit ONNODIG (certifi werkt) én we willen truststore daar NIET globaal in de SSL-laag
+# hangen — het patcht álle TLS in het proces en dat houden we van productie af.
+import sys as _sys
+if _sys.platform == "win32":
+    try:
+        import truststore as _truststore
+        _truststore.inject_into_ssl()
+    except Exception:
+        pass
 
 import hashlib
 import json
