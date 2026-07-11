@@ -3517,9 +3517,19 @@ def _inject_page_css(css):
 
 def _inject_keyed_css(key, css):
     """Zoals _inject_page_css maar met een vaste key in plaats van content-hash.
-    Elke render overschrijft dezelfde style-tag — voorkomt accumulatie van
-    verouderde stijlen bij Streamlit hot-reloads tussen code-edits."""
+    PERF: alleen (her)injecteren als de inhoud voor deze key WIJZIGDE t.o.v. de vorige
+    render. Anders deed elke rerun een component-iframe-round-trip (merkbaar traag op
+    Streamlit Cloud) — o.a. de globale 'compact_view' bij élke klik en de overlay-CSS
+    op elke datapagina zodra er rijen zijn. De <style id="sp-k-..."> blijft in de
+    document-head staan over reruns heen, dus bij gelijke inhoud is opnieuw injecteren
+    onnodig. Bij een echte page-load (F5) reset session_state → wordt 'ie opnieuw gezet.
+    (De oude 'elke render overschrijven' was tegen stale-CSS bij dev hot-reloads; die
+    zijn er in productie niet, en bij gewijzigde inhoud injecteren we alsnog opnieuw.)"""
     css_id = "sp-k-" + key
+    _seen = st.session_state.setdefault("_css_keyed_seen", {})
+    if _seen.get(key) == css:
+        return   # inhoud onveranderd → de bestaande <style> in de head volstaat
+    _seen[key] = css
     _components.html(
         "<script>(function(){"
         "var p=window.parent.document;"
