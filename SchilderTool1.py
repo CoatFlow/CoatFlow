@@ -704,7 +704,6 @@ if _AUTH_OK and _auth.is_active():
     _auth.require_auth()
 
 init_state()
-import time as _rt; _rt0 = _rt.perf_counter()   # [DBG tijdelijk]
 
 # Sessie bewaren (cookie) zodat een page-refresh ingelogd blijft (Fase 2).
 if _AUTH_OK and _auth.is_active():
@@ -9642,12 +9641,3 @@ elif selected == "Admin":
         '<div style="font-size:11.5px;color:#94A3B8;margin-top:18px;display:flex;align-items:center;gap:6px;">'
         '<i class="bi bi-shield-check"></i>Server-side beveiligd · cross-tenant via service_role · '
         'wijzigingen worden direct in Supabase opgeslagen.</div>', unsafe_allow_html=True)
-
-
-try:   # [DBG tijdelijk] — server-rerun-tijd + data-omvang per account (weer weg na diagnose)
-    _dbg_ms = (_rt.perf_counter() - _rt0) * 1000
-    _dbg_c = lambda _k: len(st.session_state.get(_k) or [])
-    st.caption(f"⏱ {_dbg_ms:.0f} ms · projecten {_dbg_c('projecten')} · klanten "
-               f"{_dbg_c('klanten')} · producten {_dbg_c('producten')} · personeel {_dbg_c('personeel')}")
-except Exception:
-    pass
