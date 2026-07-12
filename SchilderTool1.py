@@ -17,6 +17,27 @@ import tempfile
 import html as _html
 from pathlib import Path
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DIAGNOSTISCHE SCHAKELAAR — LITE_MODE
+# ─────────────────────────────────────────────────────────────────────────────
+# Test of de niet-essentiële `components.html`-JS-iframes de online traagheid
+# veroorzaken. Staat 'ie op True → die JS-verrijkingen (dashboard-nav-koppeling,
+# popover-styling, long-press-verwijderen, offerte+factuur-dubbel-download, kaart-
+# styling van de toevoeg-formulieren) worden OVERGESLAGEN. De kern-CRUD blijft werken
+# via de gewone knoppen; alleen wat JS-gemak/politoer valt weg.
+#
+# VOLLEDIG OMKEERBAAR: zet LITE_MODE = False → de app draait weer exact zoals voorheen
+# (al je oude knoppen/gedrag terug). Er verandert niets aan data, berekeningen of opslag.
+LITE_MODE = True
+
+def _html_component(*args, **kwargs):
+    """components.html, maar in LITE_MODE overgeslagen (diagnostische test).
+    Gebruikt voor NIET-essentiële JS-verrijking. LITE_MODE=False → identiek aan
+    het oude `_components.html(...)`-gedrag."""
+    if LITE_MODE:
+        return None
+    return _components.html(*args, **kwargs)
+
 # Productimport (URL → automatische invulling). Modulair, defensief geladen:
 # ontbreekt het module-bestand op een deploy, dan blijft de app gewoon werken
 # en toont de import-sectie een nette melding.
@@ -4785,7 +4806,7 @@ if selected == "Dashboard":
             st.rerun()
 
         # JS: verberg Streamlit-knop en koppel HTML-span-klik eraan
-        _components.html("""<script>(function(){
+        _html_component("""<script>(function(){
 var SPAN_ID='db-proj-bekijk-link';
 var BTN_TXT='Bekijk alles →';
 function wire(){
@@ -5300,7 +5321,7 @@ go();
                                     st.rerun()
 
             # JS: popover compact + chevron verbergen
-            _components.html("""<script>(function(){
+            _html_component("""<script>(function(){
 var p=window.parent.document;
 /* Verberg expand_more chevron in ALLE popover-knoppen */
 function hideChevrons(){
@@ -5580,7 +5601,7 @@ if(!p._pjPopWatching){
                         # dus elke huidige rij werkt; bij elke run worden de vorige handlers
                         # netjes verwijderd en een lopende timer gestopt → onbeperkt en direct
                         # achter elkaar verwijderen, zonder refresh of paginawissel.
-                        _components.html("""<script>(function(){
+                        _html_component("""<script>(function(){
 var p=window.parent.document;
 var THRESHOLD=620;
 function findTrigger(idx){
@@ -6159,7 +6180,7 @@ elif selected == "Offertes":
         # onclick-handlers, dus koppelen we de dubbele download via een gedelegeerde
         # click-listener op het hoofddocument. Bij elke run herbonden (oude eerst weg) →
         # geen dode iframe-closures (zelfde les als de long-press-fix).
-        _components.html("""<script>(function(){
+        _html_component("""<script>(function(){
 var p=window.parent.document;
 if(p._ofPdfDual){ p.removeEventListener('click', p._ofPdfDual, true); }
 p._ofPdfDual=function(ev){
@@ -7283,7 +7304,7 @@ go();
 
         # JS: witte cards + form-border weg (gelijke hoogte gebeurt via CSS hierboven)
         # Streamlit 1.55: card = stColumn > stVerticalBlock > stLayoutWrapper > stVerticalBlock
-        _components.html("""<script>(function(){
+        _html_component("""<script>(function(){
 function fix(){
     var p=window.parent.document;
     /* Form-border weg */
@@ -8636,7 +8657,7 @@ go();
 
         # JS: witte cards + gelijke hoogte rij-cards + form-border weg
         # Streamlit 1.55: card = stLayoutWrapper > stVerticalBlock (al dan niet via stColumn)
-        _components.html("""<script>(function(){
+        _html_component("""<script>(function(){
 function fix(){
     var p=window.parent.document;
     /* Form-border weg */
