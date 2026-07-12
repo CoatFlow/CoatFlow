@@ -28,7 +28,7 @@ from pathlib import Path
 #
 # VOLLEDIG OMKEERBAAR: zet LITE_MODE = False → de app draait weer exact zoals voorheen
 # (al je oude knoppen/gedrag terug). Er verandert niets aan data, berekeningen of opslag.
-LITE_MODE = True
+LITE_MODE = False
 
 def _html_component(*args, **kwargs):
     """components.html, maar in LITE_MODE overgeslagen (diagnostische test).
