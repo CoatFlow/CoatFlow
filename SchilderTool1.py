@@ -1299,61 +1299,53 @@ def eerste_validatiefout(*resultaten):
             return fout
     return ""
 
-def get_pdf_bytes(project):
-    """Return cached PDF bytes + base64 string.
-    PDF wordt opnieuw gegenereerd zodra de projectdata óf de instellingen wijzigen.
-    De cache key is een MD5-hash van project + volledige instellingen (SP-007)."""
-    if "pdf_cache" not in st.session_state:
-        st.session_state.pdf_cache = {}
-    # SP-008: borg de prijs-snapshot vóór de cache-key wordt berekend,
-    # zodat de key de definitieve projectinhoud weerspiegelt.
-    if verzeker_prijs_snapshot(project):
-        save_data()
-    pid = project["id"]
-    cache_key = hashlib.md5(
+def _pdf_cache_key(project):
+    """MD5-hash van project + volledige instellingen (SP-007) → wijzigt zodra de
+    projectdata óf de instellingen wijzigen, en is identiek voor identieke inhoud."""
+    return hashlib.md5(
         json.dumps(
             {"project": project, "instellingen": st.session_state.instellingen},
             sort_keys=True, default=str
         ).encode()
     ).hexdigest()
-    cached = st.session_state.pdf_cache.get(pid, {})
-    if cached.get("key") != cache_key:
-        bestand = maak_offerte_pdf(project)
-        with open(bestand, "rb") as fh:
-            raw = fh.read()
-        st.session_state.pdf_cache[pid] = {
-            "key":   cache_key,
-            "bytes": raw,
-            "b64":   base64.b64encode(raw).decode(),
-        }
-    return st.session_state.pdf_cache[pid]
+
+
+# PERF: PDF-generatie was de zwaarste kostenpost op de Offertes-pagina (per offerte
+# werd bij ELKE render een offerte- én factuur-PDF gemaakt; de cache was per-sessie,
+# dus elke nieuwe sessie/host-herstart genereerde alles opnieuw → seconden). Nu een
+# GLOBALE cache (@st.cache_data, server-breed, over sessies/reruns heen), gekeyd op de
+# inhouds-hash: per projectversie maar één keer genereren. `_project` heeft een leading
+# underscore → Streamlit hasht dat argument niet (alleen de hashbare cache_key). De hash
+# is inhouds-gebaseerd, dus geen tenant-lek: identieke inhoud = identieke PDF.
+@st.cache_data(show_spinner=False, max_entries=400)
+def _offerte_pdf_cached(cache_key, _project):
+    bestand = maak_offerte_pdf(_project)
+    with open(bestand, "rb") as fh:
+        raw = fh.read()
+    return {"bytes": raw, "b64": base64.b64encode(raw).decode()}
+
+
+@st.cache_data(show_spinner=False, max_entries=400)
+def _factuur_pdf_cached(cache_key, _project):
+    bestand = maak_factuur_pdf(_project)
+    with open(bestand, "rb") as fh:
+        raw = fh.read()
+    return {"bytes": raw, "b64": base64.b64encode(raw).decode()}
+
+
+def get_pdf_bytes(project):
+    """Return offerte-PDF bytes + base64. Globaal gecachet op de inhouds-hash."""
+    # SP-008: borg de prijs-snapshot vóór de hash → de key weerspiegelt de definitieve
+    # projectinhoud. verzeker_prijs_snapshot muteert alleen bij de eerste keer.
+    if verzeker_prijs_snapshot(project):
+        save_data()
+    return _offerte_pdf_cached(_pdf_cache_key(project), project)
 
 
 def get_factuur_bytes(project):
-    """Return cached factuur-PDF bytes + base64. Gebruikt dezelfde project+instellingen-
-    hash als get_pdf_bytes (SP-007) en dezelfde projectgegevens, zodat de factuur alleen
-    opnieuw wordt gegenereerd bij een wijziging (geen dubbele berekening per rerun). De
-    prijs-snapshot is al door get_pdf_bytes geborgd; hier dus niet opnieuw."""
-    if "factuur_cache" not in st.session_state:
-        st.session_state.factuur_cache = {}
-    pid = project["id"]
-    cache_key = hashlib.md5(
-        json.dumps(
-            {"project": project, "instellingen": st.session_state.instellingen},
-            sort_keys=True, default=str
-        ).encode()
-    ).hexdigest()
-    cached = st.session_state.factuur_cache.get(pid, {})
-    if cached.get("key") != cache_key:
-        bestand = maak_factuur_pdf(project)
-        with open(bestand, "rb") as fh:
-            raw = fh.read()
-        st.session_state.factuur_cache[pid] = {
-            "key":   cache_key,
-            "bytes": raw,
-            "b64":   base64.b64encode(raw).decode(),
-        }
-    return st.session_state.factuur_cache[pid]
+    """Return factuur-PDF bytes + base64. Zelfde globale cache; prijs-snapshot is al
+    door get_pdf_bytes geborgd."""
+    return _factuur_pdf_cached(_pdf_cache_key(project), project)
 
 
 def ui_alert(msg, type="success"):
