@@ -1,0 +1,19 @@
+# Render Blueprint voor CoatFlow (Streamlit) — regio Frankfurt, gratis tier.
+# ---------------------------------------------------------------------------
+# Deploy: Render dashboard → New → Blueprint → kies de CoatFlow-repo.
+# Render leest dit bestand en maakt de webservice automatisch aan.
+#
+# NA het aanmaken: voeg je Supabase-secrets toe als "Secret File" op pad
+#   .streamlit/secrets.toml
+# (zie RENDER_DEPLOY.md). Zet NOOIT secrets in dít bestand — het staat in Git.
+services:
+  - type: web
+    name: coatflow
+    runtime: python
+    region: frankfurt          # EU, dicht bij NL + je Supabase (Frankfurt)
+    plan: free                 # volledig gratis (slaapt na ~15 min inactiviteit)
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "streamlit run SchilderTool1.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
