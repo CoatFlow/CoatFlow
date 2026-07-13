@@ -137,6 +137,26 @@ def _secrets():
                     raw = st.secrets
             except Exception:
                 raw = None
+        # 3) Terugval: ENVIRONMENT-VARIABELEN. Hosts als Render/Railway/Fly zetten config
+        #    vaak als env-vars i.p.v. een .streamlit/secrets.toml — die leest st.secrets
+        #    niet, waardoor de app stil op JSON-modus bleef (geen login). Accepteert
+        #    zowel HOOFDLETTERS (SUPABASE_URL) als lowercase.
+        if not raw:
+            import os
+            _env = {}
+            for _dst, _names in (
+                ("supabase_url",         ("SUPABASE_URL", "supabase_url")),
+                ("supabase_service_key", ("SUPABASE_SERVICE_KEY", "supabase_service_key")),
+                ("supabase_anon_key",    ("SUPABASE_ANON_KEY", "supabase_anon_key")),
+                ("default_company_id",   ("DEFAULT_COMPANY_ID", "default_company_id")),
+            ):
+                for _n in _names:
+                    _v = os.environ.get(_n)
+                    if _v:
+                        _env[_dst] = _v
+                        break
+            if _env.get("supabase_url"):
+                raw = _env
         if not raw:
             return None
 
