@@ -22,7 +22,7 @@ slaapstand). Je Supabase (coatflow) blijft staan; alleen het app'je draait hier.
 - **Name:** `coatflow`.
 - **Image and shape** → **Edit**:
   - **Image:** `Canonical Ubuntu 22.04`.
-  - **Shape** → **Ampere** → **VM.Standard.A1.Flex** → zet **OCPU = 4** en **Memory = 24 GB** (dit valt volledig onder Always Free).
+  - **Shape** → **Ampere** → **VM.Standard.A1.Flex** → zet **OCPU = 2** en **Memory = 12 GB** (de Always-Free-limiet voor nieuwe accounts; ruim voldoende — nog altijd ~20× de CPU van Render-gratis).
 - **Networking:** laat op standaard (maakt een VCN + subnet aan). Zorg dat **"Assign a public IPv4 address" = Yes**.
 - **SSH keys:** kies **Generate a key pair for me** → **download** de **private key** (bewaar 'm goed! bv. `coatflow.key`).
 - Klik **Create**. Wacht tot de instance **Running** is en noteer het **Public IP address**.
