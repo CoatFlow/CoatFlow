@@ -104,6 +104,10 @@ _anon = None
 _anon_lock = threading.Lock()
 # dirty-tracking: laatst weggeschreven content-hash per (company_id, groep)
 _last_hashes: dict[tuple, str] = {}
+# per-rij dirty-tracking: laatst weggeschreven {id: rij-hash} per (company_id, tabel).
+# Hiermee upsert _sync_table alléén gewijzigde/nieuwe rijen en delete alléén verdwenen
+# rijen → 1 kleine query per save i.p.v. "alle rijen herschrijven + altijd een delete".
+_last_rows: dict[tuple, dict] = {}
 
 
 def _secrets():
@@ -574,9 +578,25 @@ def _agenda_payload(agenda_taken):
     return out
 
 
+# Groepen die via _sync_table (id-gebaseerde tabellen) worden weggeschreven. links en
+# agenda gaan via delete-all + reinsert, settings via een enkele update → niet hier.
+_SYNC_GROUPS = ("klanten", "producten", "personeel", "taken", "projecten")
+
+
+def _seed_row_hashes(company_id, payloads):
+    """Leg per sync-tabel de {id: rij-hash} vast, zodat _sync_table na een load meteen
+    weet welke rijen al in de DB staan (eerste save = niets herschrijven)."""
+    for grp in _SYNC_GROUPS:
+        _last_rows[(company_id, grp)] = {
+            r["id"]: _hash(r) for r in payloads.get(grp, []) if r.get("id") is not None
+        }
+
+
 def _seed_hashes(company_id, state):
-    for grp, content in _group_payloads(state).items():
+    payloads = _group_payloads(state)
+    for grp, content in payloads.items():
         _last_hashes[(company_id, grp)] = _hash(content)
+    _seed_row_hashes(company_id, payloads)
 
 
 def _is_changed(company_id, grp, content) -> bool:
@@ -590,15 +610,44 @@ def _mark_saved(company_id, grp, content):
 
 
 def _sync_table(cl, table, company_id, rows):
-    """Upsert alle rows (+company_id) en verwijder DB-rijen die niet meer bestaan."""
-    payload = [dict(r, company_id=company_id) for r in rows]
-    if payload:
-        cl.table(table).upsert(payload, on_conflict="company_id,id").execute()
-    keep = [r["id"] for r in rows if r.get("id") is not None]
-    q = cl.table(table).delete().eq("company_id", company_id)
-    if keep:
-        q = q.not_.in_("id", keep)
-    q.execute()
+    """Schrijf de tabel weg met zo min mogelijk round-trips:
+      • upsert ALLEEN gewijzigde/nieuwe rijen (t.o.v. wat we het laatst wegschreven);
+      • DELETE alleen als er daadwerkelijk rijen verdwenen zijn (anders: geen query).
+    Retry-veilig: _last_rows wordt pas bijgewerkt nadat upsert én delete zijn geslaagd,
+    zodat de service_role-terugval de write veilig kan overdoen. Als de vorige staat
+    onbekend is (geen seed), valt 'ie terug op het oude, veilige "alles herschrijven"."""
+    key = (company_id, table)
+    prev = _last_rows.get(key)  # {id: hash} of None (onbekend)
+
+    cur: dict = {}
+    changed = []
+    for r in rows:
+        rid = r.get("id")
+        h = _hash(r)
+        if rid is not None:
+            cur[rid] = h
+        # Onbekende vorige staat, id-loze rij, of gewijzigde/nieuwe rij → (her)schrijven.
+        if prev is None or rid is None or prev.get(rid) != h:
+            changed.append(r)
+
+    if changed:
+        cl.table(table).upsert(
+            [dict(r, company_id=company_id) for r in changed],
+            on_conflict="company_id,id").execute()
+
+    if prev is None:
+        # Vorige staat onbekend → veilige volledige opschoning (oud gedrag).
+        keep = list(cur.keys())
+        q = cl.table(table).delete().eq("company_id", company_id)
+        if keep:
+            q = q.not_.in_("id", keep)
+        q.execute()
+    else:
+        removed = [rid for rid in prev if rid not in cur]
+        if removed:
+            cl.table(table).delete().eq("company_id", company_id).in_("id", removed).execute()
+
+    _last_rows[key] = cur
 
 
 def save_company_data(company_id, state: dict):
