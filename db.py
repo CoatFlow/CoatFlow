@@ -286,6 +286,22 @@ def _hash(obj) -> str:
     ).hexdigest()
 
 
+def _strip_volatile(obj):
+    """Verwijder het vluchtige `updated_at` (rij-bouwers zetten dat op _now()) zodat het
+    NIET meetelt in de wijzigingsdetectie. Zonder dit lijkt élke rij bij elke serialisatie
+    'gewijzigd' → dan herschrijft elke save alles (ook bij puur navigeren)."""
+    if isinstance(obj, dict):
+        return {k: v for k, v in obj.items() if k != "updated_at"}
+    if isinstance(obj, list):
+        return [_strip_volatile(x) for x in obj]
+    return obj
+
+
+def _hash_stable(obj) -> str:
+    """Hash voor dirty-tracking: negeert updated_at. De DB-write behoudt updated_at wél."""
+    return _hash(_strip_volatile(obj))
+
+
 # Veld-whitelists per tabel (voorkomt dat afgeleide velden zoals medewerkers/
 # project_ids of onbekende keys naar de verkeerde kolom worden gestuurd).
 def _klant_row(k: dict) -> dict:
@@ -588,25 +604,25 @@ def _seed_row_hashes(company_id, payloads):
     weet welke rijen al in de DB staan (eerste save = niets herschrijven)."""
     for grp in _SYNC_GROUPS:
         _last_rows[(company_id, grp)] = {
-            r["id"]: _hash(r) for r in payloads.get(grp, []) if r.get("id") is not None
+            r["id"]: _hash_stable(r) for r in payloads.get(grp, []) if r.get("id") is not None
         }
 
 
 def _seed_hashes(company_id, state):
     payloads = _group_payloads(state)
     for grp, content in payloads.items():
-        _last_hashes[(company_id, grp)] = _hash(content)
+        _last_hashes[(company_id, grp)] = _hash_stable(content)
     _seed_row_hashes(company_id, payloads)
 
 
 def _is_changed(company_id, grp, content) -> bool:
     """Alleen CHECKEN (niet markeren) — markeren gebeurt pas ná een geslaagde write,
     zodat een mislukte JWT-poging + service_role-terugval de write veilig overdoet."""
-    return _last_hashes.get((company_id, grp)) != _hash(content)
+    return _last_hashes.get((company_id, grp)) != _hash_stable(content)
 
 
 def _mark_saved(company_id, grp, content):
-    _last_hashes[(company_id, grp)] = _hash(content)
+    _last_hashes[(company_id, grp)] = _hash_stable(content)
 
 
 def _sync_table(cl, table, company_id, rows):
@@ -623,7 +639,7 @@ def _sync_table(cl, table, company_id, rows):
     changed = []
     for r in rows:
         rid = r.get("id")
-        h = _hash(r)
+        h = _hash_stable(r)
         if rid is not None:
             cur[rid] = h
         # Onbekende vorige staat, id-loze rij, of gewijzigde/nieuwe rij → (her)schrijven.
