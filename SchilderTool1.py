@@ -1364,6 +1364,35 @@ def ui_alert(msg, type="success"):
         unsafe_allow_html=True
     )
 
+
+def ga_naar_overzicht_tab():
+    """Klik de 'Overzicht'-tab via JS (st.tabs kent geen programmatische selectie).
+    Gebruikt door Klanten/Personeel/Projecten om ná 'toevoegen' terug te keren naar het
+    overzicht. BELANGRIJK: een UNIEKE nonce per aanroep, anders ziet Streamlit een
+    identieke components.html en HERGEBRUIKT het iframe → het script draait dan alleen
+    de 1e keer (2e toevoeging bleef op de invoer-tab hangen). De nonce forceert een
+    her-mount zodat de klik élke keer gebeurt. Retry tot 4s tegen trage hydration."""
+    _n = st.session_state.get("_ovz_tab_nonce", 0) + 1
+    st.session_state["_ovz_tab_nonce"] = _n
+    _components.html("""<script>(function(){
+/* nonce __NONCE__ */
+var p=window.parent.document;
+var n=0;
+function go(){
+    n++;
+    var tabs=p.querySelectorAll('button[data-baseweb="tab"], [role="tab"]');
+    var t=null;
+    for(var i=0;i<tabs.length;i++){ if(tabs[i].textContent.trim()==='Overzicht'){ t=tabs[i]; break; } }
+    if(t){
+        if(t.getAttribute('aria-selected')==='true') return;   // gelukt → klaar
+        t.click();
+    }
+    if(n<40) setTimeout(go, 100);   // blijf tot 4s proberen tot de tab echt geselecteerd is
+}
+go();
+})();</script>""".replace("__NONCE__", str(_n)), height=0)
+
+
 # =====================================================
 # PDF GENERATIE
 # =====================================================
@@ -5128,22 +5157,7 @@ elif selected == "Projecten":
     # het nieuwe project direct zichtbaar is (st.tabs kent geen programmatische selectie →
     # klik de Overzicht-tab éénmalig via JS zodra de vlag staat; retry tot 4s tegen hydration).
     if st.session_state.pop("pj_goto_overzicht", False):
-        _components.html("""<script>(function(){
-var p=window.parent.document;
-var n=0;
-function go(){
-    n++;
-    var tabs=p.querySelectorAll('button[data-baseweb="tab"], [role="tab"]');
-    var t=null;
-    for(var i=0;i<tabs.length;i++){ if(tabs[i].textContent.trim()==='Overzicht'){ t=tabs[i]; break; } }
-    if(t){
-        if(t.getAttribute('aria-selected')==='true') return;
-        t.click();
-    }
-    if(n<40) setTimeout(go, 100);
-}
-go();
-})();</script>""", height=0)
+        ga_naar_overzicht_tab()
 
     with tab1:
         st.markdown('<div style="margin-bottom:20px;"><div class="pj-page-title">Projecten</div><div class="pj-page-sub">Beheer alle lopende, afgeronde en geplande projecten.</div></div>', unsafe_allow_html=True)
@@ -6777,22 +6791,7 @@ elif selected == "Klanten":
     # (zelfde patroon als Personeel). st.tabs kent geen programmatische selectie; we
     # klikken de Overzicht-tab éénmalig via JS (frontend-only) zodra de vlag staat.
     if st.session_state.pop("kl_goto_overzicht", False):
-        _components.html("""<script>(function(){
-var p=window.parent.document;
-var n=0;
-function go(){
-    n++;
-    var tabs=p.querySelectorAll('button[data-baseweb="tab"], [role="tab"]');
-    var t=null;
-    for(var i=0;i<tabs.length;i++){ if(tabs[i].textContent.trim()==='Overzicht'){ t=tabs[i]; break; } }
-    if(t){
-        if(t.getAttribute('aria-selected')==='true') return;   // gelukt → klaar
-        t.click();
-    }
-    if(n<40) setTimeout(go, 100);   // blijf tot 4s proberen tot de tab echt geselecteerd is
-}
-go();
-})();</script>""", height=0)
+        ga_naar_overzicht_tab()
 
     # ──────────────────────────────────────────────────
     # OVERZICHT TAB
@@ -8162,22 +8161,7 @@ elif selected == "Personeel":
     # JS (frontend-only, geen rerun) zodra de vlag is gezet. Alleen op de Personeel-pagina
     # actief, dus geen invloed op de tabs van andere pagina's.
     if st.session_state.pop("ps_goto_overzicht", False):
-        _components.html("""<script>(function(){
-var p=window.parent.document;
-var n=0;
-function go(){
-    n++;
-    var tabs=p.querySelectorAll('button[data-baseweb="tab"], [role="tab"]');
-    var t=null;
-    for(var i=0;i<tabs.length;i++){ if(tabs[i].textContent.trim()==='Overzicht'){ t=tabs[i]; break; } }
-    if(t){
-        if(t.getAttribute('aria-selected')==='true') return;   // gelukt → klaar
-        t.click();
-    }
-    if(n<40) setTimeout(go, 100);   // blijf tot 4s proberen tot de tab echt geselecteerd is
-}
-go();
-})();</script>""", height=0)
+        ga_naar_overzicht_tab()
 
     # ══════════════════════════════════════════
     # OVERZICHT TAB
