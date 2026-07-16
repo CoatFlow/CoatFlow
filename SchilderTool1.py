@@ -714,6 +714,8 @@ def init_state():
 
     if "geselecteerd_project" not in st.session_state:
         st.session_state.geselecteerd_project = None
+    if "pj_meta_edit" not in st.session_state:
+        st.session_state.pj_meta_edit = None
 
     if not DATA_PATH.exists():
         save_data()
@@ -5312,12 +5314,14 @@ elif selected == "Projecten":
                         with c_view:
                             if st.button("Bekijken", key=f"pj_view_{project['id']}", use_container_width=True):
                                 st.session_state.geselecteerd_project = project["id"]
+                                st.session_state.pj_meta_edit = None      # view-modus, niet bewerken
                                 _wis_pdf_downloadknoppen(project["id"])   # start ingeklapt
                                 st.rerun()
                         with c_dots:
                             with st.popover("⋮", use_container_width=False):
                                 if st.button("✏  Bewerken", key=f"pj_edit_{project['id']}", use_container_width=True):
                                     st.session_state.geselecteerd_project = project["id"]
+                                    st.session_state.pj_meta_edit = project["id"]   # open in bewerk-modus
                                     st.rerun()
                                 if st.button("⊞  Dupliceren", key=f"pj_dup_{project['id']}", use_container_width=True):
                                     import copy as _copy
@@ -5411,20 +5415,72 @@ if(!p._pjPopWatching){
 
                 st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
-                # ── Header card (geel folder-icoon) ──
-                st.markdown(
-                    f'<div class="pd-card" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">'
-                    f'<div style="display:flex;align-items:center;gap:14px;">'
-                    f'<div style="width:48px;height:48px;border-radius:12px;background:#FEF9C3;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
-                    f'<i class="bi bi-folder-fill" style="font-size:22px;color:#F59E0B;"></i></div>'
-                    f'<div>'
-                    f'<div style="font-size:22px;font-weight:800;color:#0F172A;letter-spacing:-0.4px;line-height:1.2;">{h(project["naam"])}</div>'
-                    f'<div style="font-size:12.5px;color:#94A3B8;margin-top:3px;">{h(get_klant_naam(project["klant_id"]))} · {h(project["adres"])}</div>'
-                    f'</div></div>'
-                    f'<span class="pj-badge {badge_cls2}" style="flex-shrink:0;font-size:12.5px;padding:5px 14px;">'
-                    f'<span class="pj-badge-dot"></span>{badge_lbl2}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True)
+                # ── Header card (geel folder-icoon) — of het bewerk-formulier (3-puntjes > Bewerken) ──
+                if st.session_state.get("pj_meta_edit") == project["id"]:
+                    with st.container(border=True):
+                        st.markdown(
+                            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
+                            '<i class="bi bi-pencil-square" style="font-size:16px;color:#2563EB;"></i>'
+                            '<span style="font-size:15px;font-weight:700;color:#0F172A;">Projectgegevens bewerken</span>'
+                            '</div>', unsafe_allow_html=True)
+                        with st.form(f"pj_meta_form_{project['id']}"):
+                            _pm_naam = st.text_input("Projectnaam", value=project.get("naam", ""))
+                            _kl_ids = [k["id"] for k in st.session_state.klanten]
+                            # Een (per ongeluk) verwijderde klant tóch selecteerbaar houden.
+                            if project.get("klant_id") is not None and project["klant_id"] not in _kl_ids:
+                                _kl_ids = [project["klant_id"]] + _kl_ids
+                            _pmk1, _pmk2 = st.columns(2)
+                            with _pmk1:
+                                if _kl_ids:
+                                    _kidx = _kl_ids.index(project["klant_id"]) if project.get("klant_id") in _kl_ids else 0
+                                    _pm_klant = st.selectbox("Klant", _kl_ids, index=_kidx,
+                                                             format_func=lambda kid: get_klant_naam(kid))
+                                else:
+                                    _pm_klant = project.get("klant_id")
+                                    st.caption("Geen klanten beschikbaar.")
+                            with _pmk2:
+                                _st_keys = list(STATUS_KLEUREN.keys())
+                                _sidx = _st_keys.index(project["status"]) if project["status"] in _st_keys else 0
+                                _pm_status = st.selectbox("Status", _st_keys, index=_sidx)
+                            _pm_adres = st.text_input("Adres", value=project.get("adres", ""))
+                            _pmc1, _pmc2 = st.columns(2)
+                            with _pmc1:
+                                _pm_opslaan = st.form_submit_button("Opslaan", type="primary", use_container_width=True)
+                            with _pmc2:
+                                _pm_annuleren = st.form_submit_button("Annuleren", use_container_width=True)
+                            if _pm_opslaan:
+                                _pm_fout = eerste_validatiefout(valideer_tekst(_pm_naam, "Projectnaam", min_len=2))
+                                if _pm_fout:
+                                    ui_alert(_pm_fout, "error")
+                                else:
+                                    _p = st.session_state.projecten[project_idx]
+                                    _p["naam"]     = _pm_naam.strip()
+                                    _p["klant_id"] = _pm_klant
+                                    _p["adres"]    = _pm_adres.strip()
+                                    _p["status"]   = _pm_status
+                                    if _pm_status in FROZEN_STATUSSEN:   # SP-008: prijzen bevriezen bij uitgifte
+                                        maak_prijs_snapshot(_p)
+                                    st.session_state.pj_meta_edit = None
+                                    save_data()
+                                    st.toast("Projectgegevens bijgewerkt!")
+                                    st.rerun()
+                            if _pm_annuleren:
+                                st.session_state.pj_meta_edit = None
+                                st.rerun()
+                else:
+                    st.markdown(
+                        f'<div class="pd-card" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">'
+                        f'<div style="display:flex;align-items:center;gap:14px;">'
+                        f'<div style="width:48px;height:48px;border-radius:12px;background:#FEF9C3;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+                        f'<i class="bi bi-folder-fill" style="font-size:22px;color:#F59E0B;"></i></div>'
+                        f'<div>'
+                        f'<div style="font-size:22px;font-weight:800;color:#0F172A;letter-spacing:-0.4px;line-height:1.2;">{h(project["naam"])}</div>'
+                        f'<div style="font-size:12.5px;color:#94A3B8;margin-top:3px;">{h(get_klant_naam(project["klant_id"]))} · {h(project["adres"])}</div>'
+                        f'</div></div>'
+                        f'<span class="pj-badge {badge_cls2}" style="flex-shrink:0;font-size:12.5px;padding:5px 14px;">'
+                        f'<span class="pj-badge-dot"></span>{badge_lbl2}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True)
 
                 # ── Two-column layout: main content + acties sidebar ──
                 col_main, col_actions = st.columns([5, 2])
