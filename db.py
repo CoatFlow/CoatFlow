@@ -334,7 +334,9 @@ def _personeel_row(m: dict) -> dict:
         "uurtarief": m.get("uurtarief", 0) or 0, "functie": m.get("functie", ""),
         "telefoon": m.get("telefoon", ""), "email": m.get("email", ""),
         "notities": m.get("notities", ""), "actief": bool(m.get("actief", True)),
-        "status": m.get("status", "Actief"), "updated_at": _now(),
+        "status": m.get("status", "Actief"),
+        "algemeen": bool(m.get("algemeen", False)),   # ZZP: automatisch aan álle projecten
+        "updated_at": _now(),
     }
 
 

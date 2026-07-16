@@ -394,6 +394,7 @@ def migreer_personeel(mw):
     mw.setdefault("status", "Actief" if mw.get("actief", True) else "Inactief")
     if not isinstance(mw.get("project_ids"), list):
         mw["project_ids"] = []
+    mw.setdefault("algemeen", False)   # ZZP/algemeen: automatisch aan álle projecten
     return mw
 
 # Basis-instellingen die buiten de Instellingen-pagina hard worden uitgelezen
@@ -950,7 +951,8 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
         _proj_mw = [mw for mw in st.session_state.personeel
                     if mw.get("actief") and (
                         mw.get("id") in _proj_mw_ids
-                        or project_id in (mw.get("project_ids") or []))]
+                        or project_id in (mw.get("project_ids") or [])
+                        or mw.get("algemeen"))]   # "algemeen" = telt op elk project mee (ZZP)
         actieve_mw = _proj_mw if _proj_mw else [mw for mw in st.session_state.personeel if mw.get("actief")]
     else:
         actieve_mw = [mw for mw in st.session_state.personeel if mw.get("actief")]
@@ -8335,6 +8337,13 @@ elif selected == "Personeel":
                             _ps_huidig = _ps_huidig if _ps_huidig in _ps_opties else "Actief"
                             emas = st.selectbox("Status", _ps_opties,
                                                 index=_ps_opties.index(_ps_huidig))
+                        em_algemeen = st.checkbox(
+                            "Algemeen — automatisch meerekenen op álle projecten (handig voor ZZP'ers)",
+                            value=edit_mw.get("algemeen", False),
+                            key=f"ps_edit_algemeen_{edit_mw['id']}",
+                            help="Aangevinkt: telt mee in elk project, ook nieuwe. "
+                                 "De projectkeuze hieronder is dan niet nodig.",
+                        )
                         st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-top:10px;margin-bottom:4px;">Gekoppelde projecten</div>', unsafe_allow_html=True)
                         _proj_opties = [p["id"] for p in st.session_state.projecten]
                         em_proj_ids = st.multiselect(
@@ -8346,6 +8355,7 @@ elif selected == "Personeel":
                             default=[pid for pid in edit_mw.get("project_ids", []) if pid in _proj_opties],
                             placeholder="Selecteer projecten…",
                             label_visibility="collapsed",
+                            disabled=em_algemeen,
                         )
                         save_c, cancel_c, _ = st.columns([1, 1, 5])
                         with save_c:
@@ -8371,7 +8381,9 @@ elif selected == "Personeel":
                                             m["email"]       = eme
                                             m["actief"]      = (emas == "Actief")
                                             m["status"]      = emas
-                                            m["project_ids"] = em_proj_ids
+                                            m["algemeen"]    = em_algemeen
+                                            # Algemeen → losse koppelingen niet nodig (telt overal mee).
+                                            m["project_ids"] = [] if em_algemeen else em_proj_ids
                                             break
                                     st.session_state.ps_edit_id = None
                                     save_data()
@@ -8549,6 +8561,12 @@ elif selected == "Personeel":
                     '<div style="font-size:12.5px;color:#94A3B8;margin-bottom:10px;">Koppel dit personeelslid aan één of meer projecten. De uurtarieven van gekoppeld personeel worden gebruikt in de projectcalculaties.</div>',
                     unsafe_allow_html=True,
                 )
+                m_algemeen = st.checkbox(
+                    "Algemeen — automatisch meerekenen op álle projecten (handig voor ZZP'ers)",
+                    value=False,
+                    help="Aangevinkt: dit personeelslid telt mee in elk project, ook nieuwe. "
+                         "De projectkeuze hieronder is dan niet nodig.",
+                )
                 m_project_ids = st.multiselect(
                     "Gekoppelde projecten",
                     options=[p["id"] for p in st.session_state.projecten],
@@ -8556,6 +8574,7 @@ elif selected == "Personeel":
                     default=[],
                     placeholder="Selecteer projecten…",
                     label_visibility="collapsed",
+                    disabled=m_algemeen,
                 )
 
             st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
@@ -8588,7 +8607,9 @@ elif selected == "Personeel":
                         "actief":      m_status == "Actief",
                         "status":      m_status,
                         "notities":    m_notities,
-                        "project_ids": m_project_ids,
+                        "algemeen":    m_algemeen,
+                        # Algemeen → geen losse koppelingen nodig (telt overal mee).
+                        "project_ids": [] if m_algemeen else m_project_ids,
                     })
                     save_data()
                     # UX: succesmelding via flash + automatisch terug naar het overzicht.
