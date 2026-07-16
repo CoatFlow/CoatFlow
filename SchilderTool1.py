@@ -5463,10 +5463,10 @@ if(!p._pjPopWatching){
                                 # zodat de Factuur-knop hieronder een directe download-knop kan zijn.
                                 verzeker_factuur_nummer(project)
                                 save_data()
-                                with open(maak_offerte_pdf(project), "rb") as _f:
-                                    st.session_state[f"_off_bytes_{_pid}"] = _f.read()
-                                with open(maak_factuur_pdf(project), "rb") as _f:
-                                    st.session_state[f"_fact_bytes_{_pid}"] = _f.read()
+                                with open(maak_offerte_pdf(project), "rb") as _fh:
+                                    st.session_state[f"_off_bytes_{_pid}"] = _fh.read()
+                                with open(maak_factuur_pdf(project), "rb") as _fh:
+                                    st.session_state[f"_fact_bytes_{_pid}"] = _fh.read()
                             except Exception as e:
                                 ui_alert(f"PDF fout: {e}", "error")
                         # Na 'PDF genereren': Offerte + Factuur naast elkaar; beide downloaden direct.
