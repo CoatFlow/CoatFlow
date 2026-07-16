@@ -156,30 +156,23 @@ def load_data():
 def save_data():
     """Sla persistente data op. Primair Supabase; bij geen DB → lokale JSON.
     Schrijft nooit naar beide tegelijk (geen hybride opslag)."""
-    import time as _svt; _svt0 = _svt.perf_counter()   # [DBG tijdelijk — meet save-tijd]
-    try:
-        _cid = st.session_state.get("company_id") or st.session_state.get("_company_id")
-        if _use_db() and _cid:
-            try:
-                _db.save_company_data(
-                    _cid,
-                    {key: st.session_state.get(key) for key in PERSISTENT_KEYS},
-                )
-                st.session_state.pop("_db_fout", None)
-                return
-            except Exception as e:
-                # Geen stille JSON-write (zou hybride opslag worden); fout netjes tonen.
-                st.session_state["_db_fout"] = (
-                    f"Opslaan in de database is mislukt. Je laatste wijziging is mogelijk "
-                    f"niet bewaard. Details: {e}"
-                )
-                return
-        _save_data_json()
-    finally:
-        try:   # [DBG tijdelijk]
-            st.session_state["_last_save_ms"] = round((_svt.perf_counter() - _svt0) * 1000)
-        except Exception:
-            pass
+    _cid = st.session_state.get("company_id") or st.session_state.get("_company_id")
+    if _use_db() and _cid:
+        try:
+            _db.save_company_data(
+                _cid,
+                {key: st.session_state.get(key) for key in PERSISTENT_KEYS},
+            )
+            st.session_state.pop("_db_fout", None)
+            return
+        except Exception as e:
+            # Geen stille JSON-write (zou hybride opslag worden); fout netjes tonen.
+            st.session_state["_db_fout"] = (
+                f"Opslaan in de database is mislukt. Je laatste wijziging is mogelijk "
+                f"niet bewaard. Details: {e}"
+            )
+            return
+    _save_data_json()
 
 # =====================================================
 # PRODUCT- & CALCULATIE-HELPERS (gedeeld door migratie en UI)
@@ -732,7 +725,6 @@ if _AUTH_OK and _auth.is_active():
     _auth.require_auth()
 
 init_state()
-import time as _rt; _rt0 = _rt.perf_counter()   # [DBG tijdelijk — meet server-tijd op de host]
 
 # Sessie bewaren (cookie) zodat een page-refresh ingelogd blijft (Fase 2).
 if _AUTH_OK and _auth.is_active():
@@ -9641,11 +9633,3 @@ elif selected == "Admin":
         '<div style="font-size:11.5px;color:#94A3B8;margin-top:18px;display:flex;align-items:center;gap:6px;">'
         '<i class="bi bi-shield-check"></i>Server-side beveiligd · cross-tenant via service_role · '
         'wijzigingen worden direct in Supabase opgeslagen.</div>', unsafe_allow_html=True)
-
-
-try:   # [DBG tijdelijk] — server-rerun-tijd + laatste save-tijd op deze host
-    _sv = st.session_state.get("_last_save_ms")
-    _sv_txt = f" · laatste save {_sv} ms" if _sv is not None else ""
-    st.caption(f"⏱ server-rerun {(_rt.perf_counter() - _rt0) * 1000:.0f} ms{_sv_txt}")
-except Exception:
-    pass
