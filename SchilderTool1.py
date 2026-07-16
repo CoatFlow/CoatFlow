@@ -1395,6 +1395,18 @@ go();
 })();</script>""".replace("__NONCE__", str(_n)), height=0)
 
 
+# Projectkoppeling (Personeel): "Algemeen" (ZZP) staat als eerste optie IN het
+# projecten-dropdown i.p.v. een apart vinkje — selecteren = telt op elk project mee.
+_ALGEMEEN_OPT = "__algemeen__"
+
+
+def _koppel_label(v):
+    """Labeltekst voor een optie in de projectkoppeling-multiselect."""
+    if v == _ALGEMEEN_OPT:
+        return "Algemeen — alle projecten (ZZP)"
+    return next((p["naam"] for p in st.session_state.projecten if p["id"] == v), str(v))
+
+
 # =====================================================
 # PDF GENERATIE
 # =====================================================
@@ -8337,26 +8349,24 @@ elif selected == "Personeel":
                             _ps_huidig = _ps_huidig if _ps_huidig in _ps_opties else "Actief"
                             emas = st.selectbox("Status", _ps_opties,
                                                 index=_ps_opties.index(_ps_huidig))
-                        em_algemeen = st.checkbox(
-                            "Algemeen — automatisch meerekenen op álle projecten (handig voor ZZP'ers)",
-                            value=edit_mw.get("algemeen", False),
-                            key=f"ps_edit_algemeen_{edit_mw['id']}",
-                            help="Aangevinkt: telt mee in elk project, ook nieuwe. "
-                                 "De projectkeuze hieronder is dan niet nodig.",
-                        )
                         st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-top:10px;margin-bottom:4px;">Gekoppelde projecten</div>', unsafe_allow_html=True)
                         _proj_opties = [p["id"] for p in st.session_state.projecten]
-                        em_proj_ids = st.multiselect(
+                        # "Algemeen" (ZZP) staat als eerste optie IN het dropdown — zelfde werking
+                        # als voorheen het aparte vinkje: selecteren = telt op elk project mee.
+                        _em_default = ([_ALGEMEEN_OPT] if edit_mw.get("algemeen")
+                                       # SP-005: ids van verwijderde projecten wegfilteren —
+                                       # een default buiten de options crasht (StreamlitAPIException)
+                                       else [pid for pid in edit_mw.get("project_ids", []) if pid in _proj_opties])
+                        em_koppeling = st.multiselect(
                             "Gekoppelde projecten",
-                            options=_proj_opties,
-                            format_func=lambda pid: next((p["naam"] for p in st.session_state.projecten if p["id"] == pid), str(pid)),
-                            # SP-005: ids van verwijderde projecten wegfilteren —
-                            # een default buiten de options crasht (StreamlitAPIException)
-                            default=[pid for pid in edit_mw.get("project_ids", []) if pid in _proj_opties],
-                            placeholder="Selecteer projecten…",
+                            options=[_ALGEMEEN_OPT] + _proj_opties,
+                            format_func=_koppel_label,
+                            default=_em_default,
+                            placeholder="Selecteer projecten of 'Algemeen'…",
                             label_visibility="collapsed",
-                            disabled=em_algemeen,
                         )
+                        em_algemeen = _ALGEMEEN_OPT in em_koppeling
+                        em_proj_ids = [] if em_algemeen else em_koppeling
                         save_c, cancel_c, _ = st.columns([1, 1, 5])
                         with save_c:
                             st.markdown('<span class="cf-ico-mk cf-ico-save-mk"></span>', unsafe_allow_html=True)
@@ -8558,24 +8568,20 @@ elif selected == "Personeel":
                     '<i class="bi bi-diagram-3" style="font-size:16px;color:#2563EB;"></i>'
                     '<span style="font-size:14px;font-weight:700;color:#0F172A;">Projectkoppeling</span>'
                     '</div>'
-                    '<div style="font-size:12.5px;color:#94A3B8;margin-bottom:10px;">Koppel dit personeelslid aan één of meer projecten. De uurtarieven van gekoppeld personeel worden gebruikt in de projectcalculaties.</div>',
+                    '<div style="font-size:12.5px;color:#94A3B8;margin-bottom:10px;">Koppel dit personeelslid aan één of meer projecten, of kies <strong>Algemeen</strong> zodat deze op álle projecten meetelt (handig voor ZZP-ers). De uurtarieven van gekoppeld personeel worden gebruikt in de projectcalculaties.</div>',
                     unsafe_allow_html=True,
                 )
-                m_algemeen = st.checkbox(
-                    "Algemeen — automatisch meerekenen op álle projecten (handig voor ZZP'ers)",
-                    value=False,
-                    help="Aangevinkt: dit personeelslid telt mee in elk project, ook nieuwe. "
-                         "De projectkeuze hieronder is dan niet nodig.",
-                )
-                m_project_ids = st.multiselect(
+                m_koppeling = st.multiselect(
                     "Gekoppelde projecten",
-                    options=[p["id"] for p in st.session_state.projecten],
-                    format_func=lambda pid: next((p["naam"] for p in st.session_state.projecten if p["id"] == pid), str(pid)),
+                    # "Algemeen" (ZZP) als eerste optie in het dropdown → telt op elk project mee.
+                    options=[_ALGEMEEN_OPT] + [p["id"] for p in st.session_state.projecten],
+                    format_func=_koppel_label,
                     default=[],
-                    placeholder="Selecteer projecten…",
+                    placeholder="Selecteer projecten of 'Algemeen'…",
                     label_visibility="collapsed",
-                    disabled=m_algemeen,
                 )
+                m_algemeen = _ALGEMEEN_OPT in m_koppeling
+                m_project_ids = [] if m_algemeen else m_koppeling
 
             st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
             _, btn_ann, btn_opl = st.columns([6, 1.4, 2])
