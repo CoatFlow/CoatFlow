@@ -7302,41 +7302,10 @@ go();
                 else:
                     ui_alert(_kl_fout, "error")
 
-        # JS: witte cards + form-border weg (gelijke hoogte gebeurt via CSS hierboven)
-        # Streamlit 1.55: card = stColumn > stVerticalBlock > stLayoutWrapper > stVerticalBlock
-        _html_component("""<script>(function(){
-function fix(){
-    var p=window.parent.document;
-    /* Form-border weg */
-    p.querySelectorAll('[data-testid="stForm"]').forEach(function(f){
-        if(f.querySelector('span.kl-card-m')){
-            f.style.setProperty('border','none','important');
-            f.style.setProperty('background','transparent','important');
-            f.style.setProperty('box-shadow','none','important');
-        }
-    });
-    /* Juiste card-selector voor Streamlit 1.55 */
-    var cards=Array.from(p.querySelectorAll(
-        'div[data-testid="stColumn"] > div[data-testid="stVerticalBlock"] > div[data-testid="stLayoutWrapper"] > div[data-testid="stVerticalBlock"]'
-    )).filter(function(el){return el.querySelector('span.kl-card-m');});
-    if(cards.length<2)return;
-    /* Wit + stijl */
-    cards.forEach(function(c){
-        c.style.setProperty('background','#FFFFFF','important');
-        c.style.setProperty('background-color','#FFFFFF','important');
-        c.style.setProperty('border','1px solid #E8EFF5','important');
-        c.style.setProperty('border-radius','14px','important');
-        c.style.setProperty('box-shadow','0 1px 4px rgba(0,0,0,0.05)','important');
-        c.querySelectorAll('[data-testid="stMarkdownContainer"],[data-testid="stHorizontalBlock"],[data-testid="stColumn"]')
-         .forEach(function(el){el.style.setProperty('background','#FFFFFF','important');});
-    });
-    /* Gelijke hoogte: zie CSS (align-items:stretch + height:100%) — geen JS-meting meer. */
-}
-fix();
-[80,200,500,1000].forEach(function(t){setTimeout(fix,t);});
-var obs=new MutationObserver(function(){clearTimeout(window._klCT);window._klCT=setTimeout(fix,60);});
-obs.observe(window.parent.document.body,{childList:true,subtree:true});
-})();</script>""", height=0, scrolling=False)
+        # Witte cards + form-border weg + gelijke hoogte: volledig via CSS hierboven
+        # (:has(span.kl-card-m) — zelfde kleuren/rand/radius/schaduw). Het oude JS-vangnet
+        # (MutationObserver op de hele document.body + 4× setTimeout) is verwijderd: de
+        # CSS-tweeling doet exact hetzelfde, maar zonder client-side herbouw-overhead per klik.
 
 # PRODUCTEN
 # =====================================================
