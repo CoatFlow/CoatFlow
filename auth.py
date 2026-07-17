@@ -437,6 +437,13 @@ def _inject_login_css():
     .stApp { background:#EEF2F7; }
     #MainMenu, header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] { display:none !important; }
     .stApp [data-testid="stMainBlockContainer"], .stApp .block-container { padding:0 !important; max-width:100% !important; }
+    /* Login exact viewport-hoog → geen (over)scroll, dus geen witte rand bovenaan.
+       Navy html/body-achtergrond als vangnet zodat er nooit wit doorschemert.
+       (Mobiel < 820px zet dit terug op 'auto' zodat de kaart daar wél kan scrollen.) */
+    html, body { height:100% !important; margin:0 !important; background:#0B2042 !important;
+                 overflow:hidden !important; overscroll-behavior:none !important; }
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        height:100vh !important; overflow:hidden !important; }
     /* geen flex-gap boven de kolommen (anders 16px witruimte boven het navy paneel) */
     [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] { gap:0 !important; }
 
@@ -550,6 +557,9 @@ def _inject_login_css():
 
     /* ---- mobiel: paneel als compacte banner bóven de kaart ---- */
     @media (max-width: 820px) {
+        /* mobiel: content stapelt en kan langer zijn dan het scherm → scroll weer aan */
+        html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            height:auto !important; min-height:100% !important; overflow:auto !important; }
         [data-testid="stHorizontalBlock"]:has(.cf-hero) { min-height:auto !important; }
         .cf-hero { min-height:auto !important; padding:32px 26px 30px !important; }
         .cf-hero-mid { margin:18px 0 !important; }
