@@ -5550,13 +5550,19 @@ if(!p._pjPopWatching){
                         if onderdeel.get("toeslag_winter"):  tsl.append("Winter")
                         if onderdeel.get("toeslag_reis"):    tsl.append("Reis")
                         _toesl = "".join(f'<span class="pd-chip-y">{t}</span>' for t in tsl) if tsl else '<span style="color:#CBD5E1;">—</span>'
-                        # BUG-05: meterwerk (kit/afplak) in strekkende meters tonen i.p.v. "0 m²";
-                        # lagen zijn dan niet van toepassing. Oppervlaktewerk blijft ongewijzigd.
+                        # Omvang met eenheid achter de waarde: m² voor oppervlaktewerk, m¹ voor
+                        # strekkende meter. Dual-unit (Schuren/Gronden) toont beide indien ingevuld.
+                        _m2v = float(onderdeel.get("m2", 0) or 0)
+                        _mtv = float(onderdeel.get("meters", 0) or 0)
                         if onderdeel_is_meterwerk(onderdeel):
-                            _omvang_cell = f'{float(onderdeel.get("meters", 0) or 0):g} m'
+                            # Puur meterwerk (kit/afplak): strekkende meters; lagen n.v.t.
+                            _omvang_cell = f'{_mtv:g} m¹'
                             _lagen_cell  = '—'
                         else:
-                            _omvang_cell = f'{onderdeel.get("m2", 0)}'
+                            _delen = []
+                            if _m2v > 0: _delen.append(f'{_m2v:g} m²')
+                            if _mtv > 0: _delen.append(f'{_mtv:g} m¹')
+                            _omvang_cell = ' + '.join(_delen) if _delen else f'{_m2v:g} m²'
                             _lagen_cell  = f'{onderdeel.get("lagen", 1)}×'
                         _tabel_rows += (
                             f'<tr class="pd-ond-row" data-ond-idx="{_ond_i}">'
@@ -5582,7 +5588,7 @@ if(!p._pjPopWatching){
                         f'</div>'
                         f'<div class="pd-table-wrap">'
                         f'<table class="pd-table"><thead><tr>'
-                        f'<th>Onderdeel</th><th>m²</th><th>Lagen</th><th>Werkzaamheden</th>'
+                        f'<th>Onderdeel</th><th>m²/m¹</th><th>Lagen</th><th>Werkzaamheden</th>'
                         f'<th class="r">Materiaal</th><th class="r">Arbeid</th>'
                         f'<th class="r">Toeslagen</th><th class="r">Totaal excl. BTW</th>'
                         f'</tr></thead><tbody>{_tabel_rows}</tbody></table>'
@@ -5846,6 +5852,12 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                 if _show_m2:
                                     st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Oppervlakte (m²) <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
                                     st.number_input("Oppervlakte (m²)", min_value=0, label_visibility="collapsed", key=_m2_key)
+                                if _show_meters:
+                                    # Contextlabel op basis van de selectie; één gedeelde meters-waarde.
+                                    _lbl = lengte_label(_show_kit, _show_afplak)
+                                    st.markdown(f'<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">{_lbl} <span style="color:#94A3B8;font-weight:400;">· per strekkende meter</span></div>', unsafe_allow_html=True)
+                                    st.number_input(_lbl, min_value=0, label_visibility="collapsed", key=_meters_key,
+                                                    help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
                                 if _show_lagen:
                                     # Lagen-limiet: max 2 als álle gekozen werkzaamheden Gronden/Afplakken/Kitwerk zijn.
                                     _ond_maxlagen = max_lagen_voor(ond_wz)
@@ -5853,12 +5865,6 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                         st.session_state[_lagen_key] = _ond_maxlagen
                                     st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Aantal lagen</div>', unsafe_allow_html=True)
                                     st.number_input("Aantal lagen", min_value=1, max_value=_ond_maxlagen, label_visibility="collapsed", key=_lagen_key)
-                                if _show_meters:
-                                    # Contextlabel op basis van de selectie; één gedeelde meters-waarde.
-                                    _lbl = lengte_label(_show_kit, _show_afplak)
-                                    st.markdown(f'<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">{_lbl} <span style="color:#94A3B8;font-weight:400;">· per strekkende meter</span></div>', unsafe_allow_html=True)
-                                    st.number_input(_lbl, min_value=0, label_visibility="collapsed", key=_meters_key,
-                                                    help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
                         # ── RECHTS: toeslagen — alle direct zichtbaar (geen uitklapper) ──
                         with oc3:
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:8px;">Toeslagen</div>', unsafe_allow_html=True)
@@ -6592,18 +6598,18 @@ elif selected == "Calculaties":
                     st.number_input("Aantal lagen", min_value=1, max_value=5, key="calc_houtwerk_lagen")
                 if _show_m2:
                     st.number_input("Oppervlakte (m²)", min_value=0, key="calc_m2")
-                if _show_lagen:
-                    # Lagen-limiet: max 2 als álle gekozen werkzaamheden Gronden/Afplakken/Kitwerk zijn.
-                    _calc_maxlagen = max_lagen_voor(calc_wz)
-                    if st.session_state.get("calc_lagen", 1) > _calc_maxlagen:
-                        st.session_state.calc_lagen = _calc_maxlagen
-                    st.number_input("Aantal lagen", min_value=1, max_value=_calc_maxlagen, key="calc_lagen")
                 if _show_meters:
                     # Contextlabel op basis van de selectie; één gedeelde meters-waarde
                     # (calc_meters) → engine, resultaten en session-state ongewijzigd.
                     _lengte_label = lengte_label(_show_kit, _show_afplak)
                     st.number_input(_lengte_label, min_value=0, key="calc_meters",
                                     help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
+                if _show_lagen:
+                    # Lagen-limiet: max 2 als álle gekozen werkzaamheden Gronden/Afplakken/Kitwerk zijn.
+                    _calc_maxlagen = max_lagen_voor(calc_wz)
+                    if st.session_state.get("calc_lagen", 1) > _calc_maxlagen:
+                        st.session_state.calc_lagen = _calc_maxlagen
+                    st.number_input("Aantal lagen", min_value=1, max_value=_calc_maxlagen, key="calc_lagen")
 
         with col_r:
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">BTW</div>', unsafe_allow_html=True)

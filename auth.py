@@ -436,6 +436,12 @@ def _inject_login_css():
     html, body, input, button, textarea, [class*="css"] { font-family:'DM Sans',sans-serif !important; }
     .stApp { background:#EEF2F7; }
     #MainMenu, header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] { display:none !important; }
+    /* Cookie-controller = transport-only component. Het iframe laadt een paar seconden en gaf
+       zolang een witte balk bovenaan de inlogpagina. Onzichtbaar houden (0px, geen ruimte);
+       display:none/height:0 breekt de cookie NIET — het iframe draait gewoon door. */
+    [data-testid="stCustomComponentV1"], [data-testid="stCustomComponent"],
+    iframe[title*="cookie"], [data-testid="stElementContainer"]:has(> iframe[title*="cookie"]) {
+        display:none !important; height:0 !important; width:0 !important; }
     .stApp [data-testid="stMainBlockContainer"], .stApp .block-container { padding:0 !important; max-width:100% !important; }
     /* Login exact viewport-hoog → geen (over)scroll, dus geen witte rand bovenaan.
        Navy html/body-achtergrond als vangnet zodat er nooit wit doorschemert.
