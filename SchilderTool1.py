@@ -228,8 +228,8 @@ PRODUCTIE_NORMEN = {
     "Muren schilderen":    {"eenheid": "m2",    "per_uur": 10.0, "per_laag": True},
     "Plafond schilderen":  {"eenheid": "m2",    "per_uur": 8.0,  "per_laag": True},
     "Houtwerk schilderen": {"eenheid": "m2",    "per_uur": 5.0,  "per_laag": True},
-    "Gronden":             {"eenheid": "m2",    "per_uur": 12.0, "per_laag": True},
-    "Schuren":             {"eenheid": "m2",    "per_uur": 10.0, "per_laag": False},
+    "Gronden":             {"eenheid": "m2",    "per_uur": 12.0, "per_laag": True,  "per_uur_meter": 15.0},
+    "Schuren":             {"eenheid": "m2",    "per_uur": 10.0, "per_laag": False, "per_uur_meter": 15.0},
     "Behang verwijderen":  {"eenheid": "m2",    "per_uur": 5.0,  "per_laag": False},
     "Behangen":            {"eenheid": "m2",    "per_uur": 6.0,  "per_laag": False},
     "Afplakken":           {"eenheid": "meter", "per_uur": 40.0, "per_laag": False},
@@ -270,6 +270,11 @@ def auto_arbeidsuren(werkzaamheden, m2, lagen, meters=0, houtwerk_m2=0):
             hoeveelheid, per_uur, per_laag = _mt, norm["per_uur"], norm.get("per_laag", False)
         elif norm:
             hoeveelheid, per_uur, per_laag = _m2, norm["per_uur"], norm.get("per_laag", False)
+            # Dual-unit (Schuren/Gronden): naast m² telt óók de strekkende meter (m1) mee,
+            # op zijn eigen tempo. Laat m1 op 0 → geen effect (opt-in per onderdeel).
+            _pm = norm.get("per_uur_meter")
+            if _pm and _pm > 0 and _mt > 0:
+                uren += (_mt / _pm) * (_lg if per_laag else 1.0)
         else:
             hoeveelheid, per_uur, per_laag = _m2, _FALLBACK_M2_PER_UUR, True
         if per_uur > 0:
@@ -750,15 +755,17 @@ st.session_state.setdefault("calc_btw", st.session_state.instellingen.get("stand
 # Session State API; een gelijktijdige value=-param gaf de Streamlit-waarschuwing
 # "created with a default value but also had its value set via the Session State API".
 # Zonder value= op de widgets (ze lezen puur uit session_state) verdwijnt die melding.
+HOUTWERK_LAGEN = 2   # houtwerk standaard 2 lagen (grond + aflak); vroeg gedefinieerd voor calc-init
 st.session_state.setdefault("calc_m2", 0)
 st.session_state.setdefault("calc_lagen", 1)
 st.session_state.setdefault("calc_meters", 0)
 st.session_state.setdefault("calc_marge", st.session_state.instellingen.get("standaard_marge", 25))
 st.session_state.setdefault("calc_houttype", "Kozijnen")       # type houtwerk (bij Houtwerk schilderen)
 st.session_state.setdefault("calc_houttype_waarde", 0.0)       # typespecifieke hoeveelheid (m/aantal/m²)
+st.session_state.setdefault("calc_houtwerk_lagen", HOUTWERK_LAGEN)   # aantal lagen bij houtwerk
 
 for _ck in ("calc_m2", "calc_lagen", "calc_meters", "calc_wz", "calc_houttype", "calc_houttype_waarde",
-            "calc_marge", "calc_btw", "ct_hoogte", "ct_spoed", "ct_buiten",
+            "calc_houtwerk_lagen", "calc_marge", "calc_btw", "ct_hoogte", "ct_spoed", "ct_buiten",
             "ct_weekend", "ct_avond", "ct_winter", "calc_uren", "calc_uren_touched"):
     if _ck in st.session_state:
         st.session_state[_ck] = st.session_state[_ck]
@@ -786,8 +793,8 @@ HOUTWERK_NORMEN = {
     "Plinten":          {"input": "meter",  "label": "Strekkende meter (m)", "m2_per_eenheid": 0.1},
     "Gevelbetimmering": {"input": "m2",     "label": "Oppervlakte (m²)",     "m2_per_eenheid": 1.0},
 }
-# Houtwerk wordt standaard in 2 lagen geschilderd (grondlaag + aflaklaag).
-HOUTWERK_LAGEN = 2
+# Houtwerk wordt standaard in 2 lagen geschilderd (grondlaag + aflaklaag) — HOUTWERK_LAGEN
+# staat hierboven al gedefinieerd (vóór de calc-init die het gebruikt).
 
 def houtwerk_effectief_m2(houttype, waarde):
     """Effectief schilderoppervlak (m²) voor houtwerk: ingevoerde hoeveelheid × de norm
@@ -817,6 +824,9 @@ def render_houttype(select_key, waarde_key):
 # het vervangt m²/lagen door Type houtwerk + een typespecifiek maatveld.
 _CALC_LENGTE_WZ = {"Afplakken", "Kitwerk"}
 _CALC_LAGEN_WZ  = {"Muren schilderen", "Plafond schilderen", "Gronden"}
+# Dual-unit: tonen zowel m² als m1 (strekkende meter). De gebruiker vult in wat past;
+# m1 telt mee in de arbeidsuren (materiaal blijft op m²).
+_CALC_DUAL_WZ   = {"Schuren", "Gronden"}
 
 
 def dimensie_flags(werkzaamheden):
@@ -829,7 +839,7 @@ def dimensie_flags(werkzaamheden):
     _wz = werkzaamheden or []
     show_kit      = "Kitwerk" in _wz
     show_afplak   = "Afplakken" in _wz
-    show_meters   = show_kit or show_afplak
+    show_meters   = show_kit or show_afplak or any(w in _CALC_DUAL_WZ for w in _wz)
     show_houtwerk = "Houtwerk schilderen" in _wz
     if show_houtwerk:
         show_m2, show_lagen = False, False      # houtwerk vervangt de generieke afmetingen
@@ -846,6 +856,8 @@ def lengte_label(show_kit, show_afplak):
         return "Lengte kit (m)"
     if show_afplak and not show_kit:
         return "Lengte afplakken (m)"
+    if not show_kit and not show_afplak:
+        return "Lengte / strekkende meter (m1)"   # Schuren/Gronden dual-unit
     return "Lengte kit/afplak (m)"
 
 STATUS_KLEUREN = {
@@ -900,7 +912,9 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
     _is_houtwerk = "Houtwerk schilderen" in werkzaamheden and _houttype in HOUTWERK_NORMEN
     if _is_houtwerk:
         m2 = houtwerk_effectief_m2(_houttype, onderdeel.get("houttype_waarde", 0))
-        lagen = HOUTWERK_LAGEN
+        # Aantal lagen instelbaar per houtwerk-onderdeel; bestaand houtwerk zónder dit veld
+        # → HOUTWERK_LAGEN (2), dus geen prijswijziging op oude calculaties.
+        lagen = int(onderdeel.get("houtwerk_lagen") or HOUTWERK_LAGEN)
 
     # Materiaalkosten
     materiaal = 0.0
@@ -962,9 +976,9 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
         gem_tarief = sum(mw["uurtarief"] for mw in actieve_mw) / len(actieve_mw)
         arbeid = uren * gem_tarief
     else:
-        # SP-012: Instellingen → Financieel "Standaard uurloon" als terugval
-        # wanneer er geen actief personeel beschikbaar is (was voorheen € 0)
-        arbeid = uren * _inst_getal(inst, "standaard_uurloon", 45.0, float)
+        # Geen (actief/algemeen) personeel in het systeem → géén arbeidskosten. Bewust
+        # geen standaard-uurloon-terugval meer: arbeid telt alleen als er personeel is.
+        arbeid = 0.0
 
     subtotaal = materiaal + arbeid
 
@@ -5751,6 +5765,7 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                     _twk_key, _tav_key, _twn_key = f"ond_twk_{_sfx}", f"ond_tav_{_sfx}", f"ond_twn_{_sfx}"
                     _uren_key, _uren_touched_key = f"ond_uren_{_sfx}", f"ond_uren_touched_{_sfx}"
                     _houttype_key, _houttype_waarde_key = f"ond_houttype_{_sfx}", f"ond_houttype_waarde_{_sfx}"
+                    _houtwerk_lagen_key = f"ond_houtwerk_lagen_{_sfx}"
                     # Beginwaarden via setdefault (géén value= op de widgets → voorkomt de
                     # "widget met default én Session-State-waarde"-waarschuwing, net als op Calculaties).
                     st.session_state.setdefault(_naam_key, "")
@@ -5759,10 +5774,11 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                     st.session_state.setdefault(_meters_key, 0)
                     st.session_state.setdefault(_houttype_key, "Kozijnen")
                     st.session_state.setdefault(_houttype_waarde_key, 0.0)
+                    st.session_state.setdefault(_houtwerk_lagen_key, HOUTWERK_LAGEN)
                     # Persistentie-lus (identiek aan Calculaties): een tijdelijk verborgen dimensieveld
                     # behoudt zijn waarde over reruns i.p.v. terug te vallen op de default.
                     for _ok in (_naam_key, _m2_key, _lagen_key, _meters_key, _wz_key,
-                                _houttype_key, _houttype_waarde_key,
+                                _houttype_key, _houttype_waarde_key, _houtwerk_lagen_key,
                                 _uren_key, _uren_touched_key, _th_key, _ts_key, _tb_key,
                                 _twk_key, _tav_key, _twn_key):
                         if _ok in st.session_state:
@@ -5801,7 +5817,8 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                                                   st.session_state.get(_houttype_waarde_key, 0))
                                             if _show_houtwerk else 0)
                             _uren_m2    = _eff_hout_m2 if _show_houtwerk else _eff_m2
-                            _uren_lagen = HOUTWERK_LAGEN if _show_houtwerk else _eff_lagen
+                            _uren_lagen = (st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)
+                                           if _show_houtwerk else _eff_lagen)
                             # Arbeidsuren: automatisch via centrale productienormen, handmatig te overschrijven.
                             _auto_uren = round(auto_arbeidsuren(ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
                             if not st.session_state.get(_uren_touched_key, False):
@@ -5824,6 +5841,8 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                 # generieke m²/lagen (gedeelde helper; engine rekent naar oppervlak).
                                 if _show_houtwerk:
                                     _ond_houttype, _ond_houttype_waarde = render_houttype(_houttype_key, _houttype_waarde_key)
+                                    st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Aantal lagen</div>', unsafe_allow_html=True)
+                                    st.number_input("Aantal lagen (houtwerk)", min_value=1, max_value=5, label_visibility="collapsed", key=_houtwerk_lagen_key)
                                 if _show_m2:
                                     st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Oppervlakte (m²) <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
                                     st.number_input("Oppervlakte (m²)", min_value=0, label_visibility="collapsed", key=_m2_key)
@@ -5859,6 +5878,7 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                         # Houtwerk: type + hoeveelheid gaan mee (engine rekent naar schilderoppervlak).
                         _save_houttype        = st.session_state.get(_houttype_key, "Kozijnen") if _show_houtwerk else None
                         _save_houttype_waarde = st.session_state.get(_houttype_waarde_key, 0.0) if _show_houtwerk else 0.0
+                        _save_houtwerk_lagen  = int(st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)) if _show_houtwerk else HOUTWERK_LAGEN
                         _save_hout_m2 = houtwerk_effectief_m2(_save_houttype, _save_houttype_waarde) if _show_houtwerk else 0
 
                         st.markdown('<span class="pj-ond-add-mk" style="display:none;"></span>', unsafe_allow_html=True)
@@ -5907,6 +5927,7 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                     # anders None/0). De engine rekent dit om naar schilderoppervlak.
                                     "houttype": _save_houttype,
                                     "houttype_waarde": _save_houttype_waarde,
+                                    "houtwerk_lagen": _save_houtwerk_lagen,
                                 })
                                 # SP-008: offerte-inhoud gewijzigd → snapshot verversen
                                 verzeker_prijs_snapshot(st.session_state.projecten[project_idx])
@@ -6457,6 +6478,7 @@ elif selected == "Calculaties":
             st.session_state["calc_wz"]     = []
             st.session_state["calc_houttype"] = "Kozijnen"
             st.session_state["calc_houttype_waarde"] = 0.0
+            st.session_state["calc_houtwerk_lagen"] = HOUTWERK_LAGEN
             st.session_state["calc_marge"]  = _std_marge
             st.session_state["calc_btw"]    = _std_btw
             st.session_state["ct_hoogte"]   = False
@@ -6541,7 +6563,8 @@ elif selected == "Calculaties":
                                                   st.session_state.get("calc_houttype_waarde", 0))
                             if _show_houtwerk else 0)
             _uren_m2    = _eff_hout_m2 if _show_houtwerk else _eff_m2
-            _uren_lagen = HOUTWERK_LAGEN if _show_houtwerk else _eff_lagen
+            _uren_lagen = (st.session_state.get("calc_houtwerk_lagen", HOUTWERK_LAGEN)
+                           if _show_houtwerk else _eff_lagen)
 
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;margin-top:14px;">Instellingen</div>', unsafe_allow_html=True)
             calc_marge = st.slider("Winstmarge %", 0, 60, key="calc_marge")
@@ -6566,6 +6589,7 @@ elif selected == "Calculaties":
                 # m²/lagen (gedeelde helper). De engine rekent dit om naar schilderoppervlak.
                 if _show_houtwerk:
                     render_houttype("calc_houttype", "calc_houttype_waarde")
+                    st.number_input("Aantal lagen", min_value=1, max_value=5, key="calc_houtwerk_lagen")
                 if _show_m2:
                     st.number_input("Oppervlakte (m²)", min_value=0, key="calc_m2")
                 if _show_lagen:
@@ -6601,9 +6625,10 @@ elif selected == "Calculaties":
         # Houtwerk: type + hoeveelheid gaan mee de engine in (die rekent naar schilderoppervlak).
         _eff_houttype        = st.session_state.get("calc_houttype", "Kozijnen") if _show_houtwerk else None
         _eff_houttype_waarde = st.session_state.get("calc_houttype_waarde", 0.0) if _show_houtwerk else 0.0
+        _eff_houtwerk_lagen  = int(st.session_state.get("calc_houtwerk_lagen", HOUTWERK_LAGEN)) if _show_houtwerk else HOUTWERK_LAGEN
         _eff_hout_m2 = houtwerk_effectief_m2(_eff_houttype, _eff_houttype_waarde) if _show_houtwerk else 0
         _uren_m2    = _eff_hout_m2 if _show_houtwerk else _eff_m2
-        _uren_lagen = HOUTWERK_LAGEN if _show_houtwerk else _eff_lagen
+        _uren_lagen = _eff_houtwerk_lagen if _show_houtwerk else _eff_lagen
         _auto_uren_now = round(auto_arbeidsuren(calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
@@ -6613,6 +6638,7 @@ elif selected == "Calculaties":
     onderdeel_calc = {
         "m2": _eff_m2, "lagen": _eff_lagen, "meters": _eff_meters, "werkzaamheden": calc_wz,
         "houttype": _eff_houttype, "houttype_waarde": _eff_houttype_waarde,
+        "houtwerk_lagen": _eff_houtwerk_lagen,
         "toeslag_hoogte": ct_hoogte, "toeslag_spoed": ct_spoed, "toeslag_buiten": ct_buiten,
         "toeslag_weekend": ct_weekend, "toeslag_avond": ct_avond, "toeslag_winter": ct_winter,
         # Arbeidsuren-override: alleen leidend als de gebruiker afwijkt van de auto-berekening.
