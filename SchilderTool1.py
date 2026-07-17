@@ -932,12 +932,21 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
                 continue
         for wz in product["werkzaamheden"]:
             if wz in werkzaamheden:
+                # `prijs` is de VERPAKKINGSprijs; ÷ inhoud → prijs per eenheid (liter/meter/vel…),
+                # zodat `verbruik (per m²/m) × stukprijs` de juiste €/m² geeft (voorheen werd door
+                # het overslaan van inhoud met de hele verpakkingsprijs per eenheid gerekend → veel
+                # te hoog). Inhoud ontbreekt/0 → 1 (geen deling; oude producten ongewijzigd).
+                _inh = float(product.get("inhoud", 1) or 1)
+                _stukprijs = float(product["prijs"]) / (_inh if _inh > 0 else 1)
                 if is_meter_product(product):
-                    # Kit/afplakwerk: lengte × verbruik per meter × prijs (GEEN m², GEEN lagen)
-                    materiaal += meters * float(product["verbruik"]) * float(product["prijs"])
+                    # Kit/afplakwerk: lengte × verbruik per meter × stukprijs (GEEN m², GEEN lagen)
+                    materiaal += meters * float(product["verbruik"]) * _stukprijs
                 else:
-                    # Oppervlaktewerk: m² × lagen × verbruik per m² × prijs (ongewijzigd)
-                    materiaal += m2 * lagen * float(product["verbruik"]) * float(product["prijs"])
+                    # Oppervlaktewerk: m² × lagen × verbruik per m² × stukprijs. Bij dual-unit
+                    # (Schuren/Gronden) telt de strekkende meter (m1) óók mee als oppervlak, zodat
+                    # materiaal niet 0 is wanneer je alleen m1 invult.
+                    _opp = m2 + (meters if wz in _CALC_DUAL_WZ else 0)
+                    materiaal += _opp * lagen * float(product["verbruik"]) * _stukprijs
                 break
 
     # Arbeidskosten — automatische uren via de centrale, per-werkzaamheid-realistische helper
