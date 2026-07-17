@@ -5858,7 +5858,7 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                     _lbl = lengte_label(_show_kit, _show_afplak)
                                     st.markdown(f'<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">{_lbl} <span style="color:#94A3B8;font-weight:400;">· per strekkende meter</span></div>', unsafe_allow_html=True)
                                     st.number_input(_lbl, min_value=0, label_visibility="collapsed", key=_meters_key,
-                                                    help="Strekkende meters voor kit- en afplakwerk (per meter berekend, niet per m²).")
+                                                    help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
                         # ── RECHTS: toeslagen — alle direct zichtbaar (geen uitklapper) ──
                         with oc3:
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:8px;">Toeslagen</div>', unsafe_allow_html=True)
@@ -5906,7 +5906,7 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                 _auto_final = round(auto_arbeidsuren(
                                     ond_wz,
                                     _save_hout_m2 if _show_houtwerk else _save_m2,
-                                    HOUTWERK_LAGEN if _show_houtwerk else _save_lagen,
+                                    _save_houtwerk_lagen if _show_houtwerk else _save_lagen,
                                     _save_meters,
                                     houtwerk_m2=(_save_hout_m2 if _show_houtwerk else _save_m2)), 1)
                                 _uren_override = (float(ond_uren)
@@ -6603,7 +6603,7 @@ elif selected == "Calculaties":
                     # (calc_meters) → engine, resultaten en session-state ongewijzigd.
                     _lengte_label = lengte_label(_show_kit, _show_afplak)
                     st.number_input(_lengte_label, min_value=0, key="calc_meters",
-                                    help="Strekkende meters voor kit-/afplakwerk (per meter berekend).")
+                                    help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
 
         with col_r:
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">BTW</div>', unsafe_allow_html=True)
