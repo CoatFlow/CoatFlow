@@ -722,6 +722,62 @@ def _save_impl(cl, company_id, state):
     write("agenda", _write_agenda)
 
 
+# ── SJABLONEN: eigen offerte-/factuur-Word-sjablonen per bedrijf ─────────────
+# Bewust BUITEN de load/save-cache-cyclus gehouden: het base64-docx is te groot om
+# bij elke save mee te syncen. Directe CRUD via _run_with_client (user-JWT met
+# service_role-terugval), altijd op company_id gefilterd — nooit cross-tenant.
+def get_sjabloon(company_id, soort):
+    """Het opgeslagen sjabloon als {'docx': bytes, 'meta': dict, 'updated_at': str},
+    of None (geen sjabloon / niet leesbaar). soort ∈ {'offerte','factuur'}."""
+    if not company_id:
+        return None
+    import base64 as _b64
+
+    def _fetch(cl):
+        r = (cl.table("sjablonen").select("docx_b64, meta, updated_at")
+               .eq("company_id", company_id).eq("soort", soort).limit(1).execute())
+        return r.data[0] if r.data else None
+
+    try:
+        row = _run_with_client(_fetch)
+    except Exception:
+        return None
+    if not row:
+        return None
+    try:
+        return {"docx": _b64.b64decode(row["docx_b64"]),
+                "meta": row.get("meta") or {},
+                "updated_at": row.get("updated_at") or ""}
+    except Exception:
+        return None
+
+
+def save_sjabloon(company_id, soort, docx_bytes, meta):
+    """Sla (of vervang) het sjabloon van dit bedrijf op. Idempotente upsert."""
+    if not company_id:
+        raise DbError("Geen actief bedrijf (company_id) — sjabloon opslaan geweigerd.")
+    import base64 as _b64
+    rij = {"company_id": company_id, "soort": soort,
+           "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
+           "meta": meta or {}, "updated_at": _now()}
+    try:
+        _run_with_client(lambda cl: cl.table("sjablonen")
+                         .upsert(rij, on_conflict="company_id,soort").execute())
+    except Exception as e:
+        raise DbError(f"Sjabloon opslaan in de database mislukte: {e}")
+
+
+def delete_sjabloon(company_id, soort):
+    """Verwijder het sjabloon van dit bedrijf (stil als het al weg is)."""
+    if not company_id:
+        return
+    try:
+        _run_with_client(lambda cl: cl.table("sjablonen").delete()
+                         .eq("company_id", company_id).eq("soort", soort).execute())
+    except Exception as e:
+        raise DbError(f"Sjabloon verwijderen mislukte: {e}")
+
+
 # ── ADMIN / PLATFORM-BEHEER ──────────────────────────────────────────────────
 # Platform-brede (cross-tenant) queries voor het /admin-dashboard. Deze draaien
 # BEWUST via de service_role client (RLS-bypass) omdat ze over álle bedrijven heen

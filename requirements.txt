@@ -16,3 +16,9 @@ supabase>=2.6
 # CERTIFICATE_VERIFY_FAILED achter antivirus/proxy-SSL-onderschepping (lokale dev).
 truststore>=0.9
 
+
+# Eigen offerte-/factuursjablonen (Word): .docx uitlezen (python-docx), placeholders
+# invullen (docxtpl) en de eenmalige AI-herkenning bij het uploaden (anthropic).
+python-docx>=1.1
+docxtpl>=0.16
+anthropic>=0.40

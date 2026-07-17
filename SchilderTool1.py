@@ -529,9 +529,9 @@ def _wis_pdf_downloadknoppen(pid=None):
     openen van een project; de knoppen komen pas terug na 'PDF genereren'."""
     if pid is None:
         _keys = [k for k in list(st.session_state.keys())
-                 if str(k).startswith("_off_bytes_") or str(k).startswith("_fact_bytes_")]
+                 if str(k).startswith(("_off_bytes_", "_fact_bytes_", "_off_ext_", "_fact_ext_"))]
     else:
-        _keys = [f"_off_bytes_{pid}", f"_fact_bytes_{pid}"]
+        _keys = [f"_off_bytes_{pid}", f"_fact_bytes_{pid}", f"_off_ext_{pid}", f"_fact_ext_{pid}"]
     for _k in _keys:
         st.session_state.pop(_k, None)
 
@@ -1372,6 +1372,657 @@ def get_factuur_bytes(project):
     """Return factuur-PDF bytes + base64. Zelfde globale cache; prijs-snapshot is al
     door get_pdf_bytes geborgd."""
     return _factuur_pdf_cached(_pdf_cache_key(project), project)
+
+
+# =====================================================
+# EIGEN SJABLONEN — Word-offerte/-factuur in eigen huisstijl
+# =====================================================
+# De schilder sleept een fictieve, volledig ingevulde offerte/factuur (.docx) in
+# Instellingen. Eén AI-aanroep herkent welke letterlijke teksten projectvelden zijn;
+# na een korte bevestiging vervangt de app die door docxtpl-placeholders en maakt de
+# onderdelen-rij herhaalbaar. Genereren is daarna deterministisch (géén AI): sjabloon
+# invullen met de bestaande rekenresultaten. Geen sjabloon → de ingebouwde PDF.
+import io as _sjb_io
+import os as _sjb_os
+import shutil as _sjb_shutil
+import subprocess as _sjb_subprocess
+import copy as _sjb_copy
+
+# Velden die de AI herkent en die bij het genereren worden ingevuld (veld → NL label).
+SJABLOON_VELDEN = {
+    "bedrijfsnaam":           "Bedrijfsnaam",
+    "bedrijf_adres":          "Bedrijfsadres",
+    "bedrijf_postcode_plaats": "Bedrijf postcode + plaats",
+    "kvk":                    "KvK-nummer",
+    "btw_nummer":             "Btw-nummer",
+    "iban":                   "IBAN",
+    "telefoon":               "Telefoon",
+    "email":                  "E-mail",
+    "website":                "Website",
+    "klantnaam":              "Klantnaam",
+    "klant_adres":            "Klantadres",
+    "klant_postcode_plaats":  "Klant postcode + plaats",
+    "projectnaam":            "Projectnaam",
+    "projectadres":           "Projectadres",
+    "documentnummer":         "Offerte-/factuurnummer",
+    "documentdatum":          "Documentdatum",
+    "geldig_tot":             "Geldig tot / vervaldatum",
+    "totaal_materiaal":       "Totaal materiaal",
+    "totaal_arbeid":          "Totaal arbeid",
+    "subtotaal_excl_btw":     "Subtotaal excl. btw",
+    "btw_percentage":         "Btw-percentage",
+    "btw_bedrag":             "Btw-bedrag",
+    "totaal_incl_btw":        "Totaal incl. btw",
+    "betalingstermijn":       "Betalingstermijn",
+}
+
+# Kolomvelden voor de onderdelen-tabel (veld → NL label in de bevestigings-UI).
+SJABLOON_KOLOMMEN = {
+    "onderdeel_naam":    "Naam onderdeel",
+    "hoeveelheid":       "Hoeveelheid (mét eenheid)",
+    "hoeveelheid_getal": "Hoeveelheid (alleen getal)",
+    "eenheid":           "Eenheid (m²/m¹)",
+    "lagen":             "Aantal lagen",
+    "werkzaamheden":     "Werkzaamheden",
+    "materiaal":         "Materiaalkosten",
+    "arbeid":            "Arbeidskosten",
+    "toeslagen":         "Toeslagen",
+    "regelbedrag":       "Regelbedrag",
+}
+
+_SJB_MIME = {
+    "pdf":  "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+# Systeem-/rolprompt voor de eenmalige AI-herkenning bij het uploaden.
+_AI_HERKEN_PROMPT = """ROL
+Je bent een uiterst nauwkeurige document-analist die Word-offertes en -facturen van
+Nederlandse schildersbedrijven omzet in herbruikbare sjablonen. Je krijgt de uitgelezen
+tekst + tabelstructuur van één ingevulde voorbeeld-offerte of -factuur.
+
+DOEL
+Bepaal welke exacte stukjes tekst overeenkomen met bekende projectvelden, zodat de app die
+later door placeholders kan vervangen. Je VERZINT NIETS: je koppelt alleen tekst die
+LETTERLIJK in het document staat. Bij twijfel geef je lage zekerheid.
+
+TE HERKENNEN VELDEN (gebruik exact deze sleutels)
+bedrijfsnaam, bedrijf_adres, bedrijf_postcode_plaats, kvk, btw_nummer, iban, telefoon,
+email, website, klantnaam, klant_adres, klant_postcode_plaats, projectnaam, projectadres,
+documentnummer (offerte-/factuurnummer), documentdatum, geldig_tot (geldig tot / verval-
+datum), totaal_materiaal, totaal_arbeid, subtotaal_excl_btw, btw_percentage, btw_bedrag,
+totaal_incl_btw, betalingstermijn.
+
+ONDERDELEN-TABEL
+Zoek de tabel met de werk-/kostenregels. Geef het tabelnummer (tabel_index, 0-gebaseerd
+zoals aangeleverd), welke rij de koprij is, welke rijen gegevensrijen zijn, en per kolom
+welk veld het is. Kolomvelden (exact deze sleutels): onderdeel_naam, hoeveelheid (getal
+mét eenheid zoals "35 m²"), hoeveelheid_getal (alleen het getal), eenheid, lagen,
+werkzaamheden, materiaal, arbeid, toeslagen, regelbedrag.
+
+REGELS
+- Alleen letterlijke matches; geen geparafraseerde of gegokte tekst.
+- Bedragen: geef de exacte string inclusief € en opmaak (bv. "€ 1.250,00").
+- Komt een waarde meerdere keren voor of twijfel je → zekerheid "laag" + noteer het in
+  "twijfels".
+- Vaste teksten van het bedrijf (voorwaarden, introzin, bedankje) zijn GEEN velden — die
+  blijven gewoon in het sjabloon staan; koppel ze niet.
+
+UITVOER — UITSLUITEND geldige JSON, exact deze vorm (laat onbekende velden weg):
+{
+  "velden": {
+    "klantnaam": {"gevonden_tekst": "Jan de Vries", "zekerheid": "hoog"}
+  },
+  "onderdelen_tabel": {
+    "gevonden": true,
+    "tabel_index": 0,
+    "kop_rij_index": 0,
+    "gegevens_rij_indexen": [1, 2, 3],
+    "kolommen": [
+      {"index": 0, "veld": "onderdeel_naam", "zekerheid": "hoog"},
+      {"index": 1, "veld": "hoeveelheid", "zekerheid": "hoog"}
+    ]
+  },
+  "twijfels": ["..."]
+}
+Geef geen uitleg buiten de JSON."""
+
+
+# ── opslag (DB in Supabase-modus, bestanden naast appdata.json in JSON-modus) ─
+def _sjb_json_pad(soort, ext):
+    return DATA_PATH.parent / "sjablonen" / f"{soort}.{ext}"
+
+
+def sjabloon_ophalen(soort):
+    """Het actieve sjabloon ({'docx': bytes, 'meta': dict, 'updated_at': str}) of None.
+    Per sessie gecachet (kleine dict) zodat reruns geen DB-roundtrip doen."""
+    cache = st.session_state.setdefault("_sjb_cache", {})
+    if soort in cache:
+        return cache[soort]
+    resultaat = None
+    try:
+        if _use_db() and st.session_state.get("company_id"):
+            resultaat = _db.get_sjabloon(st.session_state.company_id, soort)
+        else:
+            p = _sjb_json_pad(soort, "docx")
+            if p.exists():
+                meta = {}
+                mp = _sjb_json_pad(soort, "json")
+                if mp.exists():
+                    try:
+                        meta = json.loads(mp.read_text(encoding="utf-8"))
+                    except Exception:
+                        meta = {}
+                resultaat = {"docx": p.read_bytes(), "meta": meta,
+                             "updated_at": meta.get("geupload", "")}
+    except Exception:
+        resultaat = None
+    cache[soort] = resultaat
+    return resultaat
+
+
+def sjabloon_opslaan(soort, docx_bytes, meta):
+    if _use_db() and st.session_state.get("company_id"):
+        _db.save_sjabloon(st.session_state.company_id, soort, docx_bytes, meta)
+    else:
+        p = _sjb_json_pad(soort, "docx")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(docx_bytes)
+        _sjb_json_pad(soort, "json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    st.session_state.setdefault("_sjb_cache", {})[soort] = {
+        "docx": docx_bytes, "meta": meta, "updated_at": meta.get("geupload", "")}
+
+
+def sjabloon_verwijderen(soort):
+    if _use_db() and st.session_state.get("company_id"):
+        _db.delete_sjabloon(st.session_state.company_id, soort)
+    else:
+        for ext in ("docx", "json"):
+            try:
+                _sjb_json_pad(soort, ext).unlink(missing_ok=True)
+            except Exception:
+                pass
+    st.session_state.setdefault("_sjb_cache", {})[soort] = None
+
+
+# ── uitlezen (.docx → tekstblok voor de AI + tabelinhoud voor de bevestiging) ─
+def _sjb_extract(docx_bytes):
+    """(tekstblok voor de AI, tabellen als [[ [celtekst,…] per rij ] per tabel])."""
+    from docx import Document
+    doc = Document(_sjb_io.BytesIO(docx_bytes))
+    regels, tabellen = ["=== PARAGRAFEN ==="], []
+    for i, p in enumerate(doc.paragraphs):
+        t = (p.text or "").strip()
+        if t:
+            regels.append(f"[P{i}] {t}")
+    for ti, tab in enumerate(doc.tables):
+        regels.append(f"=== TABEL {ti} ===")
+        rijen = []
+        for ri, row in enumerate(tab.rows):
+            cellen = [(c.text or "").strip().replace("\n", " ") for c in row.cells]
+            rijen.append(cellen)
+            regels.append(f"[R{ri}] " + " | ".join(cellen))
+        tabellen.append(rijen)
+    for sec in doc.sections:
+        for naam, deel in (("KOPTEKST", sec.header), ("VOETTEKST", sec.footer)):
+            teksten = [(p.text or "").strip() for p in deel.paragraphs if (p.text or "").strip()]
+            for tab in deel.tables:
+                for row in tab.rows:
+                    teksten.append(" | ".join((c.text or "").strip() for c in row.cells))
+            if teksten:
+                regels.append(f"=== {naam} ===")
+                regels.extend(teksten)
+    return "\n".join(regels), tabellen
+
+
+# ── AI-herkenning (1× per upload) ────────────────────────────────────────────
+def _sjb_secret(*namen):
+    for n in namen:
+        v = _sjb_os.environ.get(n)
+        if v:
+            return v
+    try:
+        for n in namen:
+            v = st.secrets.get(n)
+            if v:
+                return str(v)
+        blok = st.secrets.get("anthropic", None)
+        if blok:
+            for n in ("api_key", "key", "ANTHROPIC_API_KEY"):
+                if blok.get(n):
+                    return str(blok.get(n))
+    except Exception:
+        pass
+    return None
+
+
+def _sjb_api_key():
+    return _sjb_secret("ANTHROPIC_API_KEY")
+
+
+def _sjb_ai_model():
+    # Stabiel model als standaard; overschrijfbaar via env/secret (nooit een tijdelijk
+    # model hardcoden).
+    return _sjb_secret("COATFLOW_AI_MODEL") or "claude-sonnet-5"
+
+
+def sjabloon_ai_herken(tekstblok):
+    """Eén AI-aanroep: documenttekst → herken-JSON (velden + onderdelen_tabel + twijfels)."""
+    key = _sjb_api_key()
+    if not key:
+        raise RuntimeError("Geen Anthropic API-sleutel gevonden. Zet ANTHROPIC_API_KEY "
+                           "als omgevingsvariabele (Railway → Variables) of in secrets.")
+    import anthropic
+    cl = anthropic.Anthropic(api_key=key)
+    msg = cl.messages.create(
+        model=_sjb_ai_model(), max_tokens=4096, temperature=0,
+        system=_AI_HERKEN_PROMPT,
+        messages=[{"role": "user", "content": tekstblok[:150000]}],
+    )
+    txt = "".join(getattr(b, "text", "") for b in msg.content)
+    s, e = txt.find("{"), txt.rfind("}")
+    if s < 0 or e <= s:
+        raise ValueError("AI gaf geen geldige JSON terug — probeer het opnieuw.")
+    return json.loads(txt[s:e + 1])
+
+
+# ── templatiseren (letterlijke teksten → placeholders; run-bewust) ───────────
+def _sjb_vervang_in_par(par, zoek, vervang):
+    """Vervang `zoek` door `vervang` in één paragraaf, met behoud van opmaak: binnen één
+    run als het kan, anders run-overspannend (placeholder erft de opmaak van de eerste
+    geraakte run). Return True als er iets vervangen is."""
+    runs = par.runs
+    if not runs:
+        return False
+    full = "".join(r.text or "" for r in runs)
+    if zoek not in full:
+        return False
+    gedaan = False
+    for r in runs:
+        if r.text and zoek in r.text:
+            r.text = r.text.replace(zoek, vervang)
+            gedaan = True
+    if gedaan:
+        return True
+    # Run-overspannend: per voorkomen de geraakte runs herverdelen.
+    for _ in range(20):   # veiligheidslimiet
+        runs = par.runs
+        teksten = [r.text or "" for r in runs]
+        full = "".join(teksten)
+        i = full.find(zoek)
+        if i < 0:
+            break
+        j = i + len(zoek)
+        pos = 0
+        for ridx, t in enumerate(teksten):
+            start, end = pos, pos + len(t)
+            pos = end
+            if end <= i or start >= j:
+                continue
+            if start <= i < end:
+                suffix = t[j - start:] if end > j else ""
+                runs[ridx].text = t[:i - start] + vervang + suffix
+            elif end > j:
+                runs[ridx].text = t[j - start:]
+            else:
+                runs[ridx].text = ""
+        gedaan = True
+    return gedaan
+
+
+def _sjb_iter_paragrafen(doc):
+    """Alle paragrafen: body, tabellen (1 niveau genest), kop- en voetteksten."""
+    for p in doc.paragraphs:
+        yield p
+    def _tabel_paragrafen(tab):
+        for row in tab.rows:
+            for cel in row.cells:
+                for p in cel.paragraphs:
+                    yield p
+                for sub in cel.tables:
+                    for row2 in sub.rows:
+                        for cel2 in row2.cells:
+                            for p2 in cel2.paragraphs:
+                                yield p2
+    for tab in doc.tables:
+        yield from _tabel_paragrafen(tab)
+    for sec in doc.sections:
+        for deel in (sec.header, sec.footer):
+            for p in deel.paragraphs:
+                yield p
+            for tab in deel.tables:
+                yield from _tabel_paragrafen(tab)
+
+
+def _sjb_zet_celtekst(cel, tekst):
+    """Vervang de volledige celinhoud door `tekst`, met de opmaak van de eerste run."""
+    van_p = cel.paragraphs[0]
+    if van_p.runs:
+        van_p.runs[0].text = tekst
+        for r in van_p.runs[1:]:
+            r.text = ""
+    else:
+        van_p.add_run(tekst)
+    for p in cel.paragraphs[1:]:
+        p._p.getparent().remove(p._p)
+
+
+def _sjb_tag_rij(template_tr, tag):
+    """Kloon een tabelrij en vervang alle tekst door één docxtpl-rijtag ({%tr … %})."""
+    from docx.oxml.ns import qn
+    nieuw = _sjb_copy.deepcopy(template_tr)
+    ts = list(nieuw.iter(qn("w:t")))
+    for t in ts:
+        t.text = ""
+    if ts:
+        ts[0].text = tag
+    else:   # defensief: rij zonder tekstnodes → maak run + tekst in de eerste cel
+        from docx.oxml import OxmlElement
+        p = next(nieuw.iter(qn("w:p")), None)
+        if p is not None:
+            r = OxmlElement("w:r"); t = OxmlElement("w:t"); t.text = tag
+            r.append(t); p.append(r)
+    return nieuw
+
+
+def sjabloon_templatiseer(docx_bytes, mapping):
+    """Zet het geüploade voorbeeld om in een docxtpl-sjabloon volgens de (bevestigde)
+    mapping: {"velden": {veld: letterlijke_tekst}, "tabel": None | {"tabel_index",
+    "gegevens_rij_indexen", "kolommen": {kolom_index: veld}}}. Return nieuwe bytes."""
+    from docx import Document
+    doc = Document(_sjb_io.BytesIO(docx_bytes))
+
+    # 1) Onderdelen-tabel eerst (extra voorbeeldrijen verdwijnen vóór de veldvervanging).
+    tab_map = mapping.get("tabel")
+    if tab_map and 0 <= int(tab_map.get("tabel_index", -1)) < len(doc.tables):
+        t = doc.tables[int(tab_map["tabel_index"])]
+        rijen = [int(r) for r in (tab_map.get("gegevens_rij_indexen") or [])
+                 if 0 <= int(r) < len(t.rows)]
+        kolommen = {int(k): v for k, v in (tab_map.get("kolommen") or {}).items() if v}
+        if rijen and kolommen:
+            tpl_idx = min(rijen)
+            tpl_rij = t.rows[tpl_idx]
+            for kol, veld in kolommen.items():
+                if 0 <= kol < len(tpl_rij.cells):
+                    _sjb_zet_celtekst(tpl_rij.cells[kol], "{{ r.%s }}" % veld)
+            for idx in sorted([r for r in rijen if r != tpl_idx], reverse=True):
+                t._tbl.remove(t.rows[idx]._tr)
+            tpl_rij._tr.addprevious(_sjb_tag_rij(tpl_rij._tr, "{%tr for r in onderdelen %}"))
+            tpl_rij._tr.addnext(_sjb_tag_rij(tpl_rij._tr, "{%tr endfor %}"))
+
+    # 2) Veldvervangingen document-breed — langste teksten eerst (tegen deel-overlap).
+    velden = {v: t for v, t in (mapping.get("velden") or {}).items() if (t or "").strip()}
+    for veld, tekst in sorted(velden.items(), key=lambda kv: -len(kv[1])):
+        placeholder = "{{ %s }}" % veld
+        for par in _sjb_iter_paragrafen(doc):
+            _sjb_vervang_in_par(par, tekst, placeholder)
+
+    uit = _sjb_io.BytesIO()
+    doc.save(uit)
+    return uit.getvalue()
+
+
+# ── genereren (deterministisch; géén AI) ─────────────────────────────────────
+def _sjb_onderdeel_regel(ond, calc):
+    """Regel-context voor de herhalende tabelrij — spiegelt de onderdelen-tabel/PDF."""
+    m2v = float(ond.get("m2", 0) or 0)
+    mtv = float(ond.get("meters", 0) or 0)
+    if onderdeel_is_meterwerk(ond):
+        hoeveelheid, getal, eenheid = f"{mtv:g} m¹", f"{mtv:g}", "m¹"
+        lagen = "—"
+    else:
+        delen, getallen, eenheden = [], [], []
+        if m2v > 0:
+            delen.append(f"{m2v:g} m²"); getallen.append(f"{m2v:g}"); eenheden.append("m²")
+        if mtv > 0:
+            delen.append(f"{mtv:g} m¹"); getallen.append(f"{mtv:g}"); eenheden.append("m¹")
+        hoeveelheid = " + ".join(delen) if delen else f"{m2v:g} m²"
+        getal = " + ".join(getallen) if getallen else f"{m2v:g}"
+        eenheid = "+".join(eenheden) if eenheden else "m²"
+        lagen = f"{ond.get('lagen', 1)}×"
+    tsl = [naam for vlag, naam in (
+        ("toeslag_hoogte", "Hoogte"), ("toeslag_spoed", "Spoed"), ("toeslag_buiten", "Buiten"),
+        ("toeslag_steiger", "Steiger"), ("toeslag_weekend", "Weekend"),
+        ("toeslag_avond", "Avond"), ("toeslag_winter", "Winter"), ("toeslag_reis", "Reis"),
+    ) if ond.get(vlag)]
+    return {
+        "onderdeel_naam": ond.get("naam", ""), "naam": ond.get("naam", ""),
+        "hoeveelheid": hoeveelheid, "hoeveelheid_getal": getal, "eenheid": eenheid,
+        "lagen": lagen, "werkzaamheden": ", ".join(ond.get("werkzaamheden", [])),
+        "materiaal": format_eur(calc["materiaal"]), "arbeid": format_eur(calc["arbeid"]),
+        "toeslagen": ", ".join(tsl) if tsl else "—",
+        "regelbedrag": format_eur(calc["excl_btw"]),
+    }
+
+
+def _sjb_context(project, soort):
+    """Render-context: alle SJABLOON_VELDEN + `onderdelen` — uit de BESTAANDE
+    rekenresultaten (bereken_onderdeel / bereken_project_totaal), geen eigen rekenwerk."""
+    inst = st.session_state.instellingen
+    klant = next((k for k in st.session_state.klanten
+                  if k.get("id") == project.get("klant_id")), {}) or {}
+    marge = project.get("marge", inst.get("standaard_marge", 25))
+    btw   = project.get("btw", inst.get("standaard_btw", 21))
+    totaal = bereken_project_totaal(project)
+    vandaag = datetime.now()
+    if soort == "offerte":
+        docnr = str(project.get("offerte_nummer") or "")
+        dagen = _inst_getal(inst, "offerte_geldigheid", 30, int)
+    else:
+        docnr = str(project.get("factuur_nummer") or "")
+        dagen = _inst_getal(inst, "betalingstermijn", 14, int)
+    onderdelen = [_sjb_onderdeel_regel(o, bereken_onderdeel(o, marge, btw, project_id=project.get("id")))
+                  for o in project.get("onderdelen", [])]
+    return {
+        "bedrijfsnaam": inst.get("bedrijfsnaam", ""),
+        "bedrijf_adres": inst.get("adres", ""),
+        "bedrijf_postcode_plaats": f"{inst.get('postcode', '')} {inst.get('plaats', '')}".strip(),
+        "kvk": inst.get("kvk", ""), "btw_nummer": inst.get("btw_nummer", ""),
+        "iban": inst.get("iban", ""), "telefoon": inst.get("telefoon", ""),
+        "email": inst.get("email", ""), "website": inst.get("website", ""),
+        "klantnaam": klant.get("naam", ""), "klant_adres": klant.get("adres", ""),
+        "klant_postcode_plaats": f"{klant.get('postcode', '')} {klant.get('stad', '')}".strip(),
+        "projectnaam": project.get("naam", ""), "projectadres": project.get("adres", ""),
+        "documentnummer": docnr,
+        "documentdatum": vandaag.strftime("%d-%m-%Y"),
+        "geldig_tot": (vandaag + timedelta(days=int(dagen or 0))).strftime("%d-%m-%Y"),
+        "totaal_materiaal": format_eur(totaal["materiaal"]),
+        "totaal_arbeid": format_eur(totaal["arbeid"]),
+        "subtotaal_excl_btw": format_eur(totaal["excl_btw"]),
+        "btw_percentage": f"{btw:g}%" if isinstance(btw, (int, float)) else str(btw),
+        "btw_bedrag": format_eur(totaal["btw_bedrag"]),
+        "totaal_incl_btw": format_eur(totaal["incl_btw"]),
+        "betalingstermijn": f"{_inst_getal(inst, 'betalingstermijn', 14, int)} dagen",
+        "onderdelen": onderdelen,
+    }
+
+
+def _sjb_docx_naar_pdf(docx_bytes):
+    """Word→PDF via LibreOffice als dat op de server staat (FASE 2); anders None →
+    de aanroeper levert dan het .docx (FASE 1)."""
+    exe = _sjb_shutil.which("soffice") or _sjb_shutil.which("libreoffice")
+    if not exe:
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = _sjb_os.path.join(tmp, "document.docx")
+            with open(src, "wb") as fh:
+                fh.write(docx_bytes)
+            _sjb_subprocess.run([exe, "--headless", "--convert-to", "pdf",
+                                 "--outdir", tmp, src],
+                                timeout=90, capture_output=True)
+            pdf = _sjb_os.path.join(tmp, "document.pdf")
+            if _sjb_os.path.exists(pdf):
+                with open(pdf, "rb") as fh:
+                    return fh.read()
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(show_spinner=False, max_entries=200)
+def _sjb_render_cached(cache_key, _project, soort):
+    """Sjabloon invullen (globaal gecachet op inhouds-hash + sjabloonversie)."""
+    sjb = sjabloon_ophalen(soort)
+    if not sjb:
+        return None
+    from docxtpl import DocxTemplate
+    tpl = DocxTemplate(_sjb_io.BytesIO(sjb["docx"]))
+    tpl.render(_sjb_context(_project, soort))
+    uit = _sjb_io.BytesIO()
+    tpl.save(uit)
+    docx_uit = uit.getvalue()
+    pdf = _sjb_docx_naar_pdf(docx_uit)
+    raw, ext = (pdf, "pdf") if pdf else (docx_uit, "docx")
+    return {"bytes": raw, "b64": base64.b64encode(raw).decode(),
+            "ext": ext, "mime": _SJB_MIME[ext]}
+
+
+def get_document_bytes(project, soort):
+    """Hét generatiepunt mét terugval: eigen sjabloon indien aanwezig, anders de
+    ingebouwde PDF. Return {'bytes','b64','ext','mime','sjabloon': bool}."""
+    sjb = sjabloon_ophalen(soort)
+    if sjb:
+        try:
+            versie = sjb.get("updated_at") or (sjb.get("meta") or {}).get("geupload", "")
+            r = _sjb_render_cached(_pdf_cache_key(project) + f"|sjb|{soort}|{versie}",
+                                   project, soort)
+            if r:
+                return dict(r, sjabloon=True)
+        except Exception as e:
+            print(f"[CoatFlow] Sjabloon-render mislukt ({soort}): {e} — terugval op ingebouwde PDF.")
+    d = get_pdf_bytes(project) if soort == "offerte" else get_factuur_bytes(project)
+    return {"bytes": d["bytes"], "b64": d["b64"], "ext": "pdf",
+            "mime": _SJB_MIME["pdf"], "sjabloon": False}
+
+
+def _render_sjabloon_kaart(soort):
+    """Sjabloon-beheerkaart bovenaan Instellingen > Offertes / > Facturen: status +
+    upload → AI-herkenning → bevestigingsstap → opslaan (of verwijderen)."""
+    lbl = "offerte" if soort == "offerte" else "factuur"
+    with st.container(border=True):
+        st.markdown(
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
+            '<div style="width:34px;height:34px;border-radius:9px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+            '<i class="bi bi-file-earmark-word" style="font-size:17px;color:#2563EB;"></i></div>'
+            f'<div><div style="font-size:14.5px;font-weight:700;color:#0F172A;">Eigen {lbl}sjabloon</div>'
+            f'<div style="font-size:12px;color:#94A3B8;">Sleep een fictieve, volledig ingevulde {lbl} (Word) hierheen — CoatFlow herkent automatisch wat vervangen moet worden.</div></div></div>',
+            unsafe_allow_html=True)
+
+        sjb = sjabloon_ophalen(soort)
+        if sjb:
+            _meta = sjb.get("meta") or {}
+            ui_alert(f"Eigen sjabloon actief — “{_meta.get('bestandsnaam', 'sjabloon.docx')}” "
+                     f"(geüpload {str(_meta.get('geupload', ''))[:10]}). Nieuwe upload vervangt het.", "success")
+            if st.button("Sjabloon verwijderen", key=f"sjb_del_{soort}"):
+                sjabloon_verwijderen(soort)
+                st.toast("Sjabloon verwijderd — de ingebouwde PDF wordt weer gebruikt.")
+                st.rerun()
+
+        up = st.file_uploader(f"Voorbeeld-{lbl} (.docx)", type=["docx"],
+                              key=f"sjb_up_{soort}", label_visibility="collapsed")
+        if up is not None:
+            sig = f"{up.name}:{up.size}"
+            if st.session_state.get(f"sjb_sig_{soort}") != sig:
+                raw = up.getvalue()
+                if not _sjb_api_key():
+                    ui_alert("AI-herkenning vereist een Anthropic API-sleutel: zet "
+                             "ANTHROPIC_API_KEY bij de omgevingsvariabelen (Railway → Variables).",
+                             "error")
+                else:
+                    try:
+                        with st.spinner("Sjabloon analyseren…"):
+                            tekst, tabellen = _sjb_extract(raw)
+                            ai = sjabloon_ai_herken(tekst)
+                        st.session_state[f"sjb_voorstel_{soort}"] = {
+                            "bytes": raw, "naam": up.name, "ai": ai, "tabellen": tabellen}
+                        st.session_state[f"sjb_sig_{soort}"] = sig
+                    except Exception as e:
+                        ui_alert(f"Analyse mislukt: {e}", "error")
+
+        voorstel = st.session_state.get(f"sjb_voorstel_{soort}")
+        if not voorstel:
+            return
+        ai = voorstel.get("ai") or {}
+        velden_ai = ai.get("velden") or {}
+        tai = ai.get("onderdelen_tabel") or {}
+        tabellen = voorstel.get("tabellen") or []
+
+        st.markdown('<div style="font-size:13.5px;font-weight:700;color:#0F172A;margin:6px 0 2px;">'
+                    'Controleer de herkenning</div>'
+                    '<div style="font-size:12px;color:#94A3B8;margin-bottom:8px;">Leeg = niet vervangen. '
+                    'De tekst moet <strong>letterlijk</strong> zo in het document staan.</div>',
+                    unsafe_allow_html=True)
+        for tw in (ai.get("twijfels") or [])[:6]:
+            st.caption(f"⚠️ {tw}")
+
+        with st.form(f"sjb_form_{soort}"):
+            veld_invoer = {}
+            _kol_l, _kol_r = st.columns(2)
+            for i, (veld, label) in enumerate(SJABLOON_VELDEN.items()):
+                info = velden_ai.get(veld) or {}
+                gevonden = str(info.get("gevonden_tekst") or "") if isinstance(info, dict) else ""
+                zek = str(info.get("zekerheid") or "") if isinstance(info, dict) else ""
+                suffix = {"hoog": " ✓", "midden": " · controleer", "laag": " · ⚠ onzeker"}.get(zek, "")
+                with (_kol_l if i % 2 == 0 else _kol_r):
+                    veld_invoer[veld] = st.text_input(label + suffix, value=gevonden,
+                                                      key=f"sjb_v_{soort}_{veld}")
+
+            kol_keuze = {}
+            t_idx = int(tai.get("tabel_index", 0) or 0)
+            heeft_tabel = bool(tai.get("gevonden")) and 0 <= t_idx < len(tabellen)
+            datarijen = [int(r) for r in (tai.get("gegevens_rij_indexen") or [])]
+            if heeft_tabel and datarijen:
+                st.markdown('<div style="font-size:13px;font-weight:700;color:#0F172A;margin:10px 0 2px;">'
+                            'Onderdelen-tabel</div>', unsafe_allow_html=True)
+                st.caption(f"Tabel {t_idx + 1} · {len(datarijen)} werkregel(s) herkend — "
+                           "kies per kolom welk gegeven erin hoort.")
+                eerste = tabellen[t_idx][min(datarijen)] if min(datarijen) < len(tabellen[t_idx]) else []
+                ai_kol = {int(c.get("index", -1)): c.get("veld") for c in (tai.get("kolommen") or [])
+                          if isinstance(c, dict)}
+                opties = ["(niet vervangen)"] + list(SJABLOON_KOLOMMEN.keys())
+                _kcols = st.columns(min(3, max(1, len(eerste))))
+                for ci, celtekst in enumerate(eerste):
+                    default = ai_kol.get(ci)
+                    idx = opties.index(default) if default in opties else 0
+                    with _kcols[ci % len(_kcols)]:
+                        kol_keuze[ci] = st.selectbox(
+                            f"Kolom {ci + 1}: “{(celtekst or '—')[:20]}”",
+                            opties, index=idx, key=f"sjb_k_{soort}_{ci}",
+                            format_func=lambda v: SJABLOON_KOLOMMEN.get(v, v))
+            elif heeft_tabel:
+                st.caption("⚠️ Tabel herkend maar zonder gegevensrijen — de tabel wordt niet vervangen.")
+
+            _b1, _b2, _ = st.columns([1.6, 1.2, 3])
+            opslaan = _b1.form_submit_button("✓  Sjabloon opslaan", type="primary",
+                                             use_container_width=True)
+            annuleren = _b2.form_submit_button("Annuleren", use_container_width=True)
+
+        if annuleren:
+            for k in (f"sjb_voorstel_{soort}", f"sjb_sig_{soort}"):
+                st.session_state.pop(k, None)
+            st.rerun()
+        if opslaan:
+            mapping = {"velden": {v: t.strip() for v, t in veld_invoer.items() if (t or "").strip()},
+                       "tabel": None}
+            gekozen = {ci: v for ci, v in kol_keuze.items() if v and v != "(niet vervangen)"}
+            if heeft_tabel and datarijen and gekozen:
+                mapping["tabel"] = {"tabel_index": t_idx,
+                                    "gegevens_rij_indexen": datarijen,
+                                    "kolommen": gekozen}
+            try:
+                nieuw = sjabloon_templatiseer(voorstel["bytes"], mapping)
+                meta = {"bestandsnaam": voorstel.get("naam", "sjabloon.docx"),
+                        "geupload": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "velden": mapping["velden"], "tabel": mapping["tabel"]}
+                sjabloon_opslaan(soort, nieuw, meta)
+                for k in (f"sjb_voorstel_{soort}", f"sjb_sig_{soort}"):
+                    st.session_state.pop(k, None)
+                st.toast(f"Eigen {lbl}sjabloon opgeslagen!", icon="✅")
+                st.rerun()
+            except Exception as e:
+                ui_alert(f"Sjabloon opslaan mislukt: {e}", "error")
 
 
 def ui_alert(msg, type="success"):
@@ -5497,10 +6148,14 @@ if(!p._pjPopWatching){
                                 # zodat de Factuur-knop hieronder een directe download-knop kan zijn.
                                 verzeker_factuur_nummer(project)
                                 save_data()
-                                with open(maak_offerte_pdf(project), "rb") as _fh:
-                                    st.session_state[f"_off_bytes_{_pid}"] = _fh.read()
-                                with open(maak_factuur_pdf(project), "rb") as _fh:
-                                    st.session_state[f"_fact_bytes_{_pid}"] = _fh.read()
+                                # Eigen sjabloon indien aanwezig (Word-huisstijl), anders de
+                                # ingebouwde PDF — get_document_bytes regelt de terugval.
+                                _doc_off = get_document_bytes(project, "offerte")
+                                st.session_state[f"_off_bytes_{_pid}"] = _doc_off["bytes"]
+                                st.session_state[f"_off_ext_{_pid}"]   = _doc_off["ext"]
+                                _doc_fac = get_document_bytes(project, "factuur")
+                                st.session_state[f"_fact_bytes_{_pid}"] = _doc_fac["bytes"]
+                                st.session_state[f"_fact_ext_{_pid}"]   = _doc_fac["ext"]
                             except Exception as e:
                                 ui_alert(f"PDF fout: {e}", "error")
                         # Na 'PDF genereren': Offerte + Factuur naast elkaar; beide downloaden direct.
@@ -5508,13 +6163,17 @@ if(!p._pjPopWatching){
                             st.markdown('<span class="pj-act-dl-mk" style="display:none;"></span>', unsafe_allow_html=True)
                             _dlc1, _dlc2 = st.columns(2)
                             with _dlc1:
+                                _oext = st.session_state.get(f"_off_ext_{_pid}", "pdf")
                                 st.download_button("Offerte", data=st.session_state[f"_off_bytes_{_pid}"],
-                                                   file_name=f"offerte_{_pid:04d}.pdf", mime="application/pdf",
+                                                   file_name=f"offerte_{_pid:04d}.{_oext}",
+                                                   mime=_SJB_MIME.get(_oext, "application/pdf"),
                                                    key=f"pj_dl_off_{_pid}", use_container_width=True)
                             with _dlc2:
                                 _fnaam = (project.get("factuur_nummer") or f"factuur_{_pid:04d}").replace(" ", "")
+                                _fext = st.session_state.get(f"_fact_ext_{_pid}", "pdf")
                                 st.download_button("Factuur", data=st.session_state[f"_fact_bytes_{_pid}"],
-                                                   file_name=f"{_fnaam}.pdf", mime="application/pdf",
+                                                   file_name=f"{_fnaam}.{_fext}",
+                                                   mime=_SJB_MIME.get(_fext, "application/pdf"),
                                                    key=f"pj_dl_fact_{_pid}", use_container_width=True)
                         st.markdown('<span class="pj-act-del-mk" style="display:none;"></span>', unsafe_allow_html=True)
                         if st.button("Verwijderen", key=f"pj_detail_del_{project['id']}", use_container_width=True):
@@ -6216,19 +6875,21 @@ elif selected == "Offertes":
             badge_cls, badge_lbl = BADGE_MAP.get(project["status"], ("concept", project["status"]))
             aangemaakt = project.get("aangemaakt", "")
             pid = project['id']
-            fname = f"offerte_{pid:04d}_{project['naam'].replace(' ', '_')}.pdf"
 
-            # PDF bytes ophalen uit cache (alleen herberekend als project gewijzigd is)
+            # Document-bytes uit cache (alleen herberekend als project/sjabloon wijzigt).
+            # get_document_bytes: eigen sjabloon indien aanwezig, anders de ingebouwde PDF.
             try:
-                pdf_data = get_pdf_bytes(project)
+                pdf_data = get_document_bytes(project, "offerte")
                 pdf_b64  = pdf_data["b64"]
+                fname = f"offerte_{pid:04d}_{project['naam'].replace(' ', '_')}.{pdf_data['ext']}"
                 # Eén klik → offerte ÉN factuur (beide uit dezelfde projectgegevens). De
                 # factuur wordt meegedownload via een verborgen sibling-link die de offerte-
                 # link bij klik aanroept. Mislukt de factuur onverhoopt, dan blijft de
                 # offerte-download gewoon werken (aparte try).
                 try:
-                    _fact_b64   = get_factuur_bytes(project)["b64"]
-                    _fact_fname = f"factuur_{pid:04d}_{project['naam'].replace(' ', '_')}.pdf"
+                    _fact_doc   = get_document_bytes(project, "factuur")
+                    _fact_b64   = _fact_doc["b64"]
+                    _fact_fname = f"factuur_{pid:04d}_{project['naam'].replace(' ', '_')}.{_fact_doc['ext']}"
                 except Exception:
                     _fact_b64 = None
                 if _fact_b64:
@@ -6236,15 +6897,15 @@ elif selected == "Offertes":
                     # beide via de gedelegeerde click-listener onderaan de lijst (Streamlit
                     # strípt inline onclick, dus koppelen we het daar).
                     pdf_link = (
-                        f'<a href="data:application/pdf;base64,{pdf_b64}" download="{fname}" '
+                        f'<a href="data:{pdf_data["mime"]};base64,{pdf_b64}" download="{fname}" '
                         f'class="of-pdf-link">'
                         f'<i class="bi bi-file-earmark-arrow-down" style="font-size:16px;"></i>PDF</a>'
-                        f'<a href="data:application/pdf;base64,{_fact_b64}" download="{_fact_fname}" '
+                        f'<a href="data:{_fact_doc["mime"]};base64,{_fact_b64}" download="{_fact_fname}" '
                         f'class="of-fact-dl" style="display:none;"></a>'
                     )
                 else:
                     pdf_link = (
-                        f'<a href="data:application/pdf;base64,{pdf_b64}" '
+                        f'<a href="data:{pdf_data["mime"]};base64,{pdf_b64}" '
                         f'download="{fname}" class="of-pdf-link">'
                         f'<i class="bi bi-file-earmark-arrow-down" style="font-size:16px;"></i>'
                         f'PDF</a>'
@@ -9049,6 +9710,8 @@ elif selected == "Instellingen":
     # TAB 3 — OFFERTES
     # ══════════════════════════════════════════════════════
     with tab_offerte:
+        # Eigen offerte-sjabloon (Word) — upload + AI-herkenning + bevestiging.
+        _render_sjabloon_kaart("offerte")
         with st.form("inst_offerte"):
 
             with st.container(border=True):
@@ -9103,6 +9766,8 @@ elif selected == "Instellingen":
     # TAB 4 — FACTUREN
     # ══════════════════════════════════════════════════════
     with tab_factuur:
+        # Eigen factuur-sjabloon (Word) — upload + AI-herkenning + bevestiging.
+        _render_sjabloon_kaart("factuur")
         st.markdown(
             '<div style="font-size:12px;color:#64748B;padding:8px 12px;background:#F8FAFC;'
             'border-radius:8px;border:1px solid #E2E8F0;margin-bottom:14px;">'
