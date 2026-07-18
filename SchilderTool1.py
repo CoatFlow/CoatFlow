@@ -1902,7 +1902,10 @@ def _render_sjabloon_kaart(soort):
     upload → AI-herkenning → bevestigingsstap → opslaan (of verwijderen)."""
     lbl = "offerte" if soort == "offerte" else "factuur"
     with st.container(border=True):
+        # Zelfde marker als de overige Instellingen-cards → witte card-styling (zie de
+        # keyed CSS 'inst_cards'); deze kaart staat buiten het form maar hoort er visueel bij.
         st.markdown(
+            '<span class="inst-card-marker" style="display:none;"></span>'
             '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
             '<div style="width:34px;height:34px;border-radius:9px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
             '<i class="bi bi-file-earmark-word" style="font-size:17px;color:#2563EB;"></i></div>'
@@ -1915,13 +1918,22 @@ def _render_sjabloon_kaart(soort):
             _meta = sjb.get("meta") or {}
             ui_alert(f"Eigen sjabloon actief — “{_meta.get('bestandsnaam', 'sjabloon.docx')}” "
                      f"(geüpload {str(_meta.get('geupload', ''))[:10]}). Nieuwe upload vervangt het.", "success")
-            if st.button("Sjabloon verwijderen", key=f"sjb_del_{soort}"):
-                sjabloon_verwijderen(soort)
-                st.toast("Sjabloon verwijderd — de ingebouwde PDF wordt weer gebruikt.")
-                st.rerun()
 
-        up = st.file_uploader(f"Voorbeeld-{lbl} (.docx)", type=["docx"],
-                              key=f"sjb_up_{soort}", label_visibility="collapsed")
+        # Verwijderknop rechts náást het uploadvak (alleen als er een sjabloon is).
+        if sjb:
+            _c_up, _c_del = st.columns([3, 1.15], vertical_alignment="center")
+        else:
+            _c_up, _c_del = st.container(), None
+
+        with _c_up:
+            up = st.file_uploader(f"Voorbeeld-{lbl} (.docx)", type=["docx"],
+                                  key=f"sjb_up_{soort}", label_visibility="collapsed")
+        if _c_del is not None:
+            with _c_del:
+                if st.button("Verwijderen", key=f"sjb_del_{soort}", use_container_width=True):
+                    sjabloon_verwijderen(soort)
+                    st.toast("Sjabloon verwijderd — de ingebouwde PDF wordt weer gebruikt.")
+                    st.rerun()
         if up is not None:
             sig = f"{up.name}:{up.size}"
             if st.session_state.get(f"sjb_sig_{soort}") != sig:
@@ -4326,6 +4338,15 @@ with st.sidebar:
     [data-testid="stElementContainer"][data-stale="true"],
     [data-testid="stVerticalBlock"][data-stale="true"],
     [data-testid="stHorizontalBlock"][data-stale="true"]{ opacity:1 !important; }
+    /* Vanaf Streamlit 1.59 (de versie die de server installeert; lokaal is dat 1.55) zit
+       diezelfde dim-stijl óók op de TABBALK en op expanders — en die krijgen géén
+       data-stale-attribuut, dus de regels hierboven misten ze. Zichtbaar bij elke trage
+       rerun: tabbalk + kaart eronder zakten naar 33% ('wazig'), o.a. tijdens de
+       AI-sjabloonherkenning. Hier op rol/testid i.p.v. data-stale → versie-onafhankelijk. */
+    [data-testid="stTabs"] [role="tablist"],
+    [data-testid="stTabs"] [role="tab"],
+    [data-testid="stExpander"] details,
+    [data-testid="stExpander"] summary{ opacity:1 !important; }
     </style>""")
 
     # Inklap-overrides: breedte + soepele animatie + toggle-knop. Komt ná de basis-CSS
@@ -9488,11 +9509,15 @@ elif selected == "Instellingen":
 
     # ── Witte cards CSS (keyed → geen accumulatie bij hot-reload) ──
     _inject_keyed_css("inst_cards", """
-    /* Overbodige buitenste form-border verwijderen (voorkomt dubbel-card effect) */
+    /* Overbodige buitenste form-border verwijderen (voorkomt dubbel-card effect).
+       Ook de padding weg: zonder border heeft die geen functie meer, maar hij duwde de
+       cards wél 15px naar binnen — waardoor ze smaller waren dan de paginakop, de
+       tabbalk én de sjabloonkaart (die buiten het form staat). Alles nu op één lijn. */
     div[data-testid="stForm"]:has(span.inst-card-marker) {
         border: none !important;
         box-shadow: none !important;
         background: transparent !important;
+        padding: 0 !important;
     }
     /* Inhoud-cards wit — Streamlit 1.55: stLayoutWrapper > stVerticalBlock
        (zelfde patroon als Klanten/Personeel; stVerticalBlockBorderWrapper bestaat
