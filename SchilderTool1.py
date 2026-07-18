@@ -1616,7 +1616,7 @@ def sjabloon_ai_herken(tekstblok):
     import anthropic
     cl = anthropic.Anthropic(api_key=key)
     msg = cl.messages.create(
-        model=_sjb_ai_model(), max_tokens=4096, temperature=0,
+        model=_sjb_ai_model(), max_tokens=4096,
         system=_AI_HERKEN_PROMPT,
         messages=[{"role": "user", "content": tekstblok[:150000]}],
     )
