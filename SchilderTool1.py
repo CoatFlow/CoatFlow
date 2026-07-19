@@ -281,11 +281,73 @@ def auto_arbeidsuren(werkzaamheden, m2, lagen, meters=0, houtwerk_m2=0):
             uren += (hoeveelheid / per_uur) * (_lg if per_laag else 1.0)
     return uren
 
-def _markeer_uren_touched(flag_key):
-    """on_change-callback voor het Arbeidsuren-veld: markeert dat de gebruiker de
-    uren handmatig heeft aangepast, zodat het veld niet langer automatisch met
-    m²/lagen meeberekent (punt 2 — override)."""
-    st.session_state[flag_key] = True
+def _markeer_uren_touched(flag_key, waarde_key=None, auto_key=None):
+    """on_change-callback voor het Arbeidsuren-veld: markeert dat de gebruiker de uren
+    handmatig heeft aangepast, zodat het veld niet langer automatisch met m²/lagen
+    meeberekent (override).
+
+    Alleen een ECHTE afwijking van de berekende waarde telt als override. Zet de
+    gebruiker de berekende waarde terug, dan volgt het veld weer automatisch mee —
+    voorheen bleef het na één aanraking voorgoed bevroren, waardoor de uren niet meer
+    meegingen met m²/m¹ en het leek alsof de berekening kapot was."""
+    if waarde_key and auto_key:
+        try:
+            afwijkend = abs(float(st.session_state.get(waarde_key, 0) or 0)
+                            - float(st.session_state.get(auto_key, 0) or 0)) > 1e-6
+        except (TypeError, ValueError):
+            afwijkend = True
+        st.session_state[flag_key] = afwijkend
+    else:
+        st.session_state[flag_key] = True
+
+
+def _herstel_auto_uren(flag_key, waarde_key, auto_key):
+    """↻-knop: override loslaten en terug naar de automatisch berekende uren."""
+    st.session_state[flag_key] = False
+    st.session_state[waarde_key] = float(st.session_state.get(auto_key, 0) or 0)
+
+
+def render_arbeidsuren(auto_uren, waarde_key, touched_key, label="Arbeidsuren",
+                       label_visibility="visible", help=None, knop_naast=True):
+    """Gedeeld Arbeidsuren-veld (Calculaties + Projecten > Onderdeel toevoegen).
+
+    Volgt automatisch de afmetingen tot de gebruiker zelf een afwijkende waarde invult;
+    het ↻-knopje (of het terugzetten van de berekende waarde) hervat het automatisch
+    meerekenen. Retourneert de te gebruiken urenwaarde.
+
+    `knop_naast=False` zet de knop ONDER het veld in plaats van ernaast. Nodig in het
+    onderdeel-formulier: dat staat al twee kolomniveaus diep (col_main > oc1) en een
+    derde niveau is smal én afgeraden door Streamlit voor kleine schermen."""
+    auto_key = waarde_key + "_auto"
+    st.session_state[auto_key] = float(auto_uren)
+    if not st.session_state.get(touched_key, False):
+        st.session_state[waarde_key] = float(auto_uren)
+    _handmatig = bool(st.session_state.get(touched_key, False))
+
+    def _invoer():
+        return st.number_input(
+            label, min_value=0.0, step=0.5, format="%.1f", key=waarde_key,
+            label_visibility=label_visibility,
+            on_change=_markeer_uren_touched, args=(touched_key, waarde_key, auto_key),
+            help=help)
+
+    def _knop():
+        st.button("↻  Auto" if not knop_naast else "↻",
+                  key=waarde_key + "_reset", use_container_width=True,
+                  disabled=not _handmatig,
+                  on_click=_herstel_auto_uren, args=(touched_key, waarde_key, auto_key),
+                  help=f"Terug naar de automatisch berekende uren ({auto_uren:.1f}).")
+
+    if knop_naast:
+        _c_in, _c_bt = st.columns([4, 1], vertical_alignment="bottom")
+        with _c_in:
+            uren = _invoer()
+        with _c_bt:
+            _knop()
+    else:
+        uren = _invoer()
+        _knop()
+    return uren
 
 def bereken_verpakkingen(benodigd, inhoud):
     """Aantal verpakkingen = benodigd materiaal ÷ inhoud (naar boven afgerond).
@@ -4821,6 +4883,10 @@ def _agenda_taken_fragment(geselecteerde_dag_key, jaar, maand):
             "id": _nid, "tekst": _txt, "titel": _txt,
             "tijd": "", "subtitel": "", "status": "Afspraak"
         })
+        # Invoerveld leegmaken. Mag hier: in een on_click-callback draait Streamlit vóór
+        # de widget opnieuw rendert, dus het overschrijven van de widget-key is toegestaan
+        # (buiten een callback geeft datzelfde een StreamlitAPIException).
+        st.session_state[f"agenda_input_{_daykey}"] = ""
         save_data()
 
     sel_dag_nr = int(geselecteerde_dag_key.split("-")[2])
@@ -6537,12 +6603,10 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                            if _show_houtwerk else _eff_lagen)
                             # Arbeidsuren: automatisch via centrale productienormen, handmatig te overschrijven.
                             _auto_uren = round(auto_arbeidsuren(ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
-                            if not st.session_state.get(_uren_touched_key, False):
-                                st.session_state[_uren_key] = float(_auto_uren)
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Arbeidsuren <span style="color:#94A3B8;font-weight:400;">· auto, aanpasbaar</span></div>', unsafe_allow_html=True)
-                            ond_uren  = st.number_input("Arbeidsuren", min_value=0.0, step=0.5, format="%.1f",
-                                                        label_visibility="collapsed", key=_uren_key,
-                                                        on_change=_markeer_uren_touched, args=(_uren_touched_key,))
+                            ond_uren = render_arbeidsuren(
+                                _auto_uren, _uren_key, _uren_touched_key,
+                                label_visibility="collapsed", knop_naast=False)
                         # ── MIDDEN: DYNAMISCHE afmetingen — alleen de velden die bij de selectie horen ──
                         with oc2:
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Afmetingen</div>', unsafe_allow_html=True)
@@ -7287,12 +7351,10 @@ elif selected == "Calculaties":
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;margin-top:14px;">Instellingen</div>', unsafe_allow_html=True)
             calc_marge = st.slider("Winstmarge %", 0, 60, key="calc_marge")
             _calc_auto_uren = round(auto_arbeidsuren(calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
-            if not st.session_state.get("calc_uren_touched", False):
-                st.session_state["calc_uren"] = float(_calc_auto_uren)
-            calc_uren = st.number_input("Arbeidsuren", min_value=0.0, step=0.5, format="%.1f",
-                                        key="calc_uren",
-                                        on_change=_markeer_uren_touched, args=("calc_uren_touched",),
-                                        help="Automatisch berekend; pas aan voor je eigen ureninschatting.")
+            calc_uren = render_arbeidsuren(
+                _calc_auto_uren, "calc_uren", "calc_uren_touched",
+                help="Automatisch berekend uit de afmetingen; pas aan voor je eigen "
+                     "ureninschatting. Met ↻ ernaast keer je terug naar de berekening.")
 
         with col_m:
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Afmetingen</div>', unsafe_allow_html=True)
