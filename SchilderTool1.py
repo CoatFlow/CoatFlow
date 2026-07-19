@@ -215,30 +215,40 @@ def max_lagen_voor(werkzaamheden):
     return 2 if (_wz and all(w in LAGEN_GELIMITEERD for w in _wz)) else 5
 
 # ── Realistische productienormen (Nederlandse schildersbranche) — CENTRAAL beheerd ──
-# Per werkzaamheid: hoeveel eenheden een schilder gemiddeld per MANUUR haalt, en of het
-# werk per verf-/grondlaag herhaald wordt. Gangbare branchegemiddelden; pas hier aan om
-# álle calculaties tegelijk te tunen (geen verspreide hardcoded getallen).
-#   eenheid  = "m2" (oppervlaktewerk) of "meter" (kit-/afplakwerk, per strekkende meter)
-#   per_uur  = productie per manuur in die eenheid
-#   per_laag = True → tijd telt per laag (schilder-/grondwerk); False → eenmalige bewerking
-# Logica-check (opdracht): muren schilderen (10) sneller dan behang verwijderen (5);
-# afplakken (40 m/u) kost weinig tijd; houtwerk (5) duurt langer dan muren (10); kitwerk
-# (meter) heeft een andere productie dan schilderwerk.
+# Uitgedrukt in UREN PER EENHEID (niet meer eenheden-per-uur): dat is hoe schildersnormen
+# in de branche staan en het leest direct als de calculatie. Pas hier aan om álle
+# calculaties tegelijk te tunen (geen verspreide hardcoded getallen).
+#   uur_per_m2 = uren per m² oppervlaktewerk
+#   uur_per_m1 = uren per strekkende meter (lijn-/kozijnwerk, kit, afplak)
+#   per_laag   = True  → puur schilder-/lakwerk, telt PER LAAG
+#                False → voorbereiding/ondergrond, telt ALTIJD ÉÉN KEER
+#
+# BELANGRIJK: voorbereidend werk (schuren, afplakken, kitwerk, gronden, behang
+# verwijderen) wordt niet vermenigvuldigd met het aantal lagen — je schuurt en plakt af
+# vóór de eerste laag, niet opnieuw vóór elke volgende. Alleen het verf-/lakwerk zelf
+# schaalt mee. Gronden stond hier eerder ten onrechte op per_laag=True.
 PRODUCTIE_NORMEN = {
-    "Muren schilderen":    {"eenheid": "m2",    "per_uur": 10.0, "per_laag": True},
-    "Plafond schilderen":  {"eenheid": "m2",    "per_uur": 8.0,  "per_laag": True},
-    "Houtwerk schilderen": {"eenheid": "m2",    "per_uur": 5.0,  "per_laag": True},
-    "Gronden":             {"eenheid": "m2",    "per_uur": 12.0, "per_laag": True,  "per_uur_meter": 15.0},
-    "Schuren":             {"eenheid": "m2",    "per_uur": 10.0, "per_laag": False, "per_uur_meter": 15.0},
-    "Behang verwijderen":  {"eenheid": "m2",    "per_uur": 5.0,  "per_laag": False},
-    "Behangen":            {"eenheid": "m2",    "per_uur": 6.0,  "per_laag": False},
-    "Afplakken":           {"eenheid": "meter", "per_uur": 40.0, "per_laag": False},
-    "Kitwerk":             {"eenheid": "meter", "per_uur": 20.0, "per_laag": False},
+    # ── Sauswerk (per laag) ──
+    "Muren schilderen":    {"uur_per_m2": 0.06, "per_laag": True},
+    "Plafond schilderen":  {"uur_per_m2": 0.08, "per_laag": True},
+    # Houtwerk rekent per houtwerk-TYPE in zijn eigen eenheid (zie HOUTWERK_NORMEN),
+    # want een deur, een trede en een meter kozijn zijn niet in m² te vangen.
+    "Houtwerk schilderen": {"per_laag": True},
+    # ── Voorbereiding & ondergrond (altijd 1x) ──
+    "Gronden":             {"uur_per_m2": 0.12, "uur_per_m1": 0.08, "per_laag": False},
+    "Schuren":             {"uur_per_m2": 0.06, "uur_per_m1": 0.05, "per_laag": False},
+    "Afplakken":           {"uur_per_m1": 0.02, "per_laag": False},
+    "Kitwerk":             {"uur_per_m1": 0.04, "per_laag": False},
+    "Behang verwijderen":  {"uur_per_m2": 0.15, "per_laag": False},
+    # ── Wandafwerking (altijd 1x) ──
+    "Behangen":            {"uur_per_m2": 0.15, "per_laag": False},
 }
-# Terugval als een werkzaamheid geen norm heeft (nooit 0 uren): oud vast tempo.
-_FALLBACK_M2_PER_UUR = 8.0
-# Productiviteit meterwerk-terugval (analoog aan het oude tempo, BUG-04).
-METER_PER_UUR = 15.0
+# Terugval als een werkzaamheid geen norm heeft (nooit 0 uren): tempo van muurschilderwerk.
+_FALLBACK_UUR_PER_M2 = 0.06
+_FALLBACK_UUR_PER_M1 = 0.05
+# Houtwerk zónder gekozen type (oude onderdelen): tarief per m² schilderoppervlak, afgeleid
+# van kozijnen (0,10 uur per m1 ÷ 0,5 m² per m1).
+_HOUTWERK_TERUGVAL_UUR_PER_M2 = 0.20
 
 def _f(x):
     """Veilige float-parse (None/'' → 0.0)."""
@@ -247,39 +257,52 @@ def _f(x):
     except (TypeError, ValueError):
         return 0.0
 
-def auto_arbeidsuren(werkzaamheden, m2, lagen, meters=0, houtwerk_m2=0):
+def _houtwerk_uren(houttype, waarde, terugval_m2=0.0):
+    """Schilderuren voor houtwerk (PER LAAG). Elk type rekent in zijn eigen eenheid:
+    kozijnen/plinten per strekkende meter, deuren per complete deur, trappen per trede,
+    gevelbetimmering per m². Zonder (bekend) type → terugval op het effectieve
+    schilderoppervlak, zodat oudere onderdelen zonder houttype blijven werken."""
+    norm = HOUTWERK_NORMEN.get(houttype)
+    if norm and norm.get("uur_per_eenheid"):
+        return max(0.0, _f(waarde)) * float(norm["uur_per_eenheid"])
+    return max(0.0, _f(terugval_m2)) * _HOUTWERK_TERUGVAL_UUR_PER_M2
+
+
+def auto_arbeidsuren(werkzaamheden, m2, lagen, meters=0, houtwerk_m2=0,
+                     houttype=None, houttype_waarde=0):
     """Realistische arbeidsuren o.b.v. de centrale PRODUCTIE_NORMEN — dé gedeelde bron voor
-    de calculatie-engine én de invoerformulieren, zodat beide identiek rekenen. Elke gekozen
-    werkzaamheid draagt bij op zijn eigen productietempo: oppervlaktewerk op m² (schilder-/
-    grondwerk per laag), meterwerk (kit/afplak) op strekkende meters. Houtwerk gebruikt het
-    effectieve schilderoppervlak (`houtwerk_m2`, uit HOUTWERK_NORMEN) i.p.v. de generieke m².
-    Zónder werkzaamheden-lijst → terugval op het oude vaste tempo (backwards-compatible)."""
-    _m2 = _f(m2); _lg = _f(lagen) or 1.0; _mt = _f(meters); _hw = _f(houtwerk_m2)
+    de calculatie-engine én de invoerformulieren, zodat beide identiek rekenen.
+
+    Formule:  totaal = (schilder-/lakuren × aantal lagen) + voorbereidingsuren
+
+    Alleen puur verf-/lakwerk (muren, plafond, houtwerk) schaalt met het aantal lagen.
+    Voorbereiding (schuren, afplakken, kitwerk, gronden, behang verwijderen) en behangen
+    tellen ALTIJD één keer: dat werk doe je vóór de eerste laag, niet opnieuw vóór elke
+    volgende. Elke werkzaamheid rekent in zijn eigen eenheid — m² en/of strekkende meter;
+    voor Schuren en Gronden tellen die twee naast elkaar mee (elk met een eigen tarief).
+
+    Zónder werkzaamheden-lijst → terugval op een vast tempo (backwards-compatible)."""
+    _m2 = _f(m2); _lg = _f(lagen) or 1.0; _mt = _f(meters)
     _wz = werkzaamheden or []
     if not _wz:
-        uren = (_m2 / _FALLBACK_M2_PER_UUR) * _lg
-        if METER_PER_UUR > 0:
-            uren += _mt / METER_PER_UUR
-        return uren
-    uren = 0.0
+        return (_m2 * _FALLBACK_UUR_PER_M2) * _lg + _mt * _FALLBACK_UUR_PER_M1
+
+    schilderuren = 0.0      # × aantal lagen
+    voorbereiding = 0.0     # altijd 1x
     for w in _wz:
-        norm = PRODUCTIE_NORMEN.get(w)
         if w == "Houtwerk schilderen":
-            hoeveelheid, per_uur, per_laag = _hw, (norm or {}).get("per_uur", _FALLBACK_M2_PER_UUR), True
-        elif norm and norm.get("eenheid") == "meter":
-            hoeveelheid, per_uur, per_laag = _mt, norm["per_uur"], norm.get("per_laag", False)
-        elif norm:
-            hoeveelheid, per_uur, per_laag = _m2, norm["per_uur"], norm.get("per_laag", False)
-            # Dual-unit (Schuren/Gronden): naast m² telt óók de strekkende meter (m1) mee,
-            # op zijn eigen tempo. Laat m1 op 0 → geen effect (opt-in per onderdeel).
-            _pm = norm.get("per_uur_meter")
-            if _pm and _pm > 0 and _mt > 0:
-                uren += (_mt / _pm) * (_lg if per_laag else 1.0)
+            schilderuren += _houtwerk_uren(houttype, houttype_waarde, houtwerk_m2)
+            continue
+        norm = PRODUCTIE_NORMEN.get(w)
+        if not norm:
+            schilderuren += _m2 * _FALLBACK_UUR_PER_M2
+            continue
+        deel = _m2 * _f(norm.get("uur_per_m2")) + _mt * _f(norm.get("uur_per_m1"))
+        if norm.get("per_laag"):
+            schilderuren += deel
         else:
-            hoeveelheid, per_uur, per_laag = _m2, _FALLBACK_M2_PER_UUR, True
-        if per_uur > 0:
-            uren += (hoeveelheid / per_uur) * (_lg if per_laag else 1.0)
-    return uren
+            voorbereiding += deel
+    return schilderuren * _lg + voorbereiding
 
 def _markeer_uren_touched(flag_key, waarde_key=None, auto_key=None):
     """on_change-callback voor het Arbeidsuren-veld: markeert dat de gebruiker de uren
@@ -834,12 +857,15 @@ WERKZAAMHEDEN_OPTIES = [
 #   input          = welk invoerveld tonen ("meter" / "aantal" / "m2")
 #   label          = veldlabel
 #   m2_per_eenheid = schilderoppervlak (m²) per ingevoerde eenheid (branchegemiddelde)
+# m2_per_eenheid  → materiaalverbruik (effectief schilderoppervlak per eenheid)
+# uur_per_eenheid → arbeidsuren PER LAAG per eenheid (branchenorm, zie PRODUCTIE_NORMEN)
+# LET OP: "Deuren" rekent per COMPLETE deur (beide zijden + randen), niet per zijde.
 HOUTWERK_NORMEN = {
-    "Kozijnen":         {"input": "meter",  "label": "Strekkende meter (m)", "m2_per_eenheid": 0.5},
-    "Deuren":           {"input": "aantal", "label": "Aantal zijdes",        "m2_per_eenheid": 1.8},
-    "Trappen":          {"input": "aantal", "label": "Aantal treden",        "m2_per_eenheid": 0.5},
-    "Plinten":          {"input": "meter",  "label": "Strekkende meter (m)", "m2_per_eenheid": 0.1},
-    "Gevelbetimmering": {"input": "m2",     "label": "Oppervlakte (m²)",     "m2_per_eenheid": 1.0},
+    "Kozijnen":         {"input": "meter",  "label": "Strekkende meter (m)", "m2_per_eenheid": 0.5, "uur_per_eenheid": 0.10},
+    "Deuren":           {"input": "aantal", "label": "Aantal deuren",        "m2_per_eenheid": 3.6, "uur_per_eenheid": 1.50},
+    "Trappen":          {"input": "aantal", "label": "Aantal treden",        "m2_per_eenheid": 0.5, "uur_per_eenheid": 0.15},
+    "Plinten":          {"input": "meter",  "label": "Strekkende meter (m)", "m2_per_eenheid": 0.1, "uur_per_eenheid": 0.10},
+    "Gevelbetimmering": {"input": "m2",     "label": "Oppervlakte (m²)",     "m2_per_eenheid": 1.0, "uur_per_eenheid": 0.25},
 }
 # Houtwerk wordt standaard in 2 lagen geschilderd (grondlaag + aflaklaag) — HOUTWERK_LAGEN
 # staat hierboven al gedefinieerd (vóór de calc-init die het gebruikt).
@@ -1001,7 +1027,10 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
     # (PRODUCTIE_NORMEN). Houtwerk gebruikt het effectieve schilderoppervlak. Override (punt 2):
     # staat er een handmatige ureninschatting op het onderdeel, dan is die leidend.
     # Ontbreekt het veld of is het leeg/None → automatische berekening (backwards-compatible).
-    _auto_uren = auto_arbeidsuren(werkzaamheden, m2, lagen, meters, houtwerk_m2=m2)
+    _auto_uren = auto_arbeidsuren(werkzaamheden, m2, lagen, meters, houtwerk_m2=m2,
+                                  houttype=(_houttype if _is_houtwerk else None),
+                                  houttype_waarde=(onderdeel.get("houttype_waarde", 0)
+                                                   if _is_houtwerk else 0))
     _uren_ovr = onderdeel.get("arbeid_uren_override", None)
     if _uren_ovr in (None, ""):
         uren = _auto_uren
@@ -6588,10 +6617,16 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                             _uren_lagen = (st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)
                                            if _show_houtwerk else _eff_lagen)
                             # Arbeidsuren: automatisch via centrale productienormen, handmatig te overschrijven.
-                            _auto_uren = round(auto_arbeidsuren(ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
+                            _auto_uren = round(auto_arbeidsuren(
+                                ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2,
+                                houttype=(st.session_state.get(_houttype_key) if _show_houtwerk else None),
+                                houttype_waarde=(st.session_state.get(_houttype_waarde_key, 0) if _show_houtwerk else 0)), 1)
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Arbeidsuren <span style="color:#94A3B8;font-weight:400;">· auto, aanpasbaar</span></div>', unsafe_allow_html=True)
                             ond_uren = render_arbeidsuren(
-                                _auto_uren, (tuple(ond_wz), _uren_m2, _uren_lagen, _eff_meters),
+                                _auto_uren,
+                                (tuple(ond_wz), _uren_m2, _uren_lagen, _eff_meters,
+                                 st.session_state.get(_houttype_key),
+                                 st.session_state.get(_houttype_waarde_key, 0)),
                                 _uren_key, _uren_touched_key,
                                 label_visibility="collapsed")
                         # ── MIDDEN: DYNAMISCHE afmetingen — alleen de velden die bij de selectie horen ──
@@ -6675,7 +6710,9 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                     _save_hout_m2 if _show_houtwerk else _save_m2,
                                     _save_houtwerk_lagen if _show_houtwerk else _save_lagen,
                                     _save_meters,
-                                    houtwerk_m2=(_save_hout_m2 if _show_houtwerk else _save_m2)), 1)
+                                    houtwerk_m2=(_save_hout_m2 if _show_houtwerk else _save_m2),
+                                    houttype=(_save_houttype if _show_houtwerk else None),
+                                    houttype_waarde=(_save_houttype_waarde if _show_houtwerk else 0)), 1)
                                 _uren_override = (float(ond_uren)
                                                   if abs(float(ond_uren) - _auto_final) > 1e-6
                                                   else None)
@@ -7337,9 +7374,15 @@ elif selected == "Calculaties":
 
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;margin-top:14px;">Instellingen</div>', unsafe_allow_html=True)
             calc_marge = st.slider("Winstmarge %", 0, 60, key="calc_marge")
-            _calc_auto_uren = round(auto_arbeidsuren(calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
+            _calc_auto_uren = round(auto_arbeidsuren(
+                calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2,
+                houttype=(st.session_state.get("calc_houttype") if _show_houtwerk else None),
+                houttype_waarde=(st.session_state.get("calc_houttype_waarde", 0) if _show_houtwerk else 0)), 1)
             calc_uren = render_arbeidsuren(
-                _calc_auto_uren, (tuple(calc_wz), _uren_m2, _uren_lagen, _eff_meters),
+                _calc_auto_uren,
+                (tuple(calc_wz), _uren_m2, _uren_lagen, _eff_meters,
+                 st.session_state.get("calc_houttype"),
+                 st.session_state.get("calc_houttype_waarde", 0)),
                 "calc_uren", "calc_uren_touched",
                 help="Automatisch berekend uit de afmetingen. Je kunt er je eigen "
                      "inschatting in zetten; zodra je de afmetingen wijzigt rekent hij "
@@ -7398,7 +7441,9 @@ elif selected == "Calculaties":
         _eff_hout_m2 = houtwerk_effectief_m2(_eff_houttype, _eff_houttype_waarde) if _show_houtwerk else 0
         _uren_m2    = _eff_hout_m2 if _show_houtwerk else _eff_m2
         _uren_lagen = _eff_houtwerk_lagen if _show_houtwerk else _eff_lagen
-        _auto_uren_now = round(auto_arbeidsuren(calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
+        _auto_uren_now = round(auto_arbeidsuren(
+            calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2,
+            houttype=_eff_houttype, houttype_waarde=_eff_houttype_waarde), 1)
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
