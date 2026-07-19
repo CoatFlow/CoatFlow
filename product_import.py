@@ -256,6 +256,25 @@ def _extract_jsonld(html_txt):
             p = _prijs_uit_offers(node.get("offers"))
             if p not in (None, "") and "prijs" not in out:
                 out["prijs"] = p
+            # Specificaties (size/weight/additionalProperty): hier staat de inhoud
+            # ('2,5 L') en soms het verbruik, óók als naam/omschrijving ze niet noemen.
+            delen = []
+            for sleutel in ("size", "weight"):
+                v = node.get(sleutel)
+                for x in (v if isinstance(v, list) else [v]):
+                    if isinstance(x, dict):
+                        delen.append(f"{x.get('value', '')} "
+                                     f"{x.get('unitText') or x.get('unitCode') or ''}")
+                    elif x:
+                        delen.append(str(x))
+            props = node.get("additionalProperty")
+            for prop in (props if isinstance(props, list) else [props] if props else []):
+                if isinstance(prop, dict):
+                    delen.append(f"{prop.get('name', '')} {prop.get('value', '')} "
+                                 f"{prop.get('unitText') or ''}")
+            spec_txt = _unescape(" ".join(d.strip() for d in delen if str(d).strip()))
+            if spec_txt and "specs" not in out:
+                out["specs"] = spec_txt
     return out
 
 
@@ -348,34 +367,76 @@ def _raad_merk(blob):
     return None
 
 
-def _parse_verbruik(tekst):
-    """Leid 'verbruik per m²' (liter/m² per laag) af uit dekkings-/rendementtekst.
-    Herkent o.a. '8-10 m² per liter', 'tot 12 m²/l', 'rendement 10 m²/liter',
-    '1 liter per 8 m²'. Alleen bij een plausibele verfdekking (2–25 m²/l → 0,04–0,5
-    l/m²); daarbuiten None (nooit een gok). Bij een bereik telt de LAAGSTE dekking
-    (= hoogste, veiligste materiaalinschatting)."""
+def _parse_verbruik(tekst, inhoud_eenheid="liter"):
+    """Leid 'verbruik per m²' af uit dekkings-/rendementtekst, in de eenheid van de
+    verpakkingsinhoud (liter-producten → l/m², kg-producten → kg/m²).
+
+    Herkent o.a. '8-10 m² per liter', 'tot 12 m²/l', '1 liter per 8 m²',
+    '1 liter is voldoende voor ca. 8 m²', '125 ml/m²', '0,1 l per m²' en voor
+    kg-producten '1,5 kg/m²' / '150 g/m²'. Alleen bij een plausibele waarde
+    (verf 2–25 m²/l → 0,04–0,5 l/m²; kg 0,05–3 kg/m²); daarbuiten None (nooit
+    een gok). Bij een bereik telt de LAAGSTE dekking (= veiligste inschatting)."""
     if not tekst:
         return None
     t = tekst.lower().replace("\xa0", " ")
-    dekkingen = []  # m² per liter
-    # 'X (- Y) m² per/​/ liter'
+    kandidaten = []  # (basis 'liter'|'kg', waarde per m²)
+    # 'X (- Y) m² per// liter'
     for m in re.finditer(r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:[-–]|tot)?\s*(\d{1,3}(?:[.,]\d{1,2})?)?\s*"
                          r"m[²2]\s*(?:per|/)\s*l(?:iter)?\b", t):
         a = _parse_getal(m.group(1))
         b2 = _parse_getal(m.group(2)) if m.group(2) else None
         vals = [x for x in (a, b2) if x and x > 0]
         if vals:
-            dekkingen.append(min(vals))
-    # inverse: 'X liter per Y m²'
-    for m in re.finditer(r"(\d{1,3}(?:[.,]\d{1,2})?)\s*l(?:iter)?\s*per\s*"
+            kandidaten.append(("liter", 1.0 / min(vals)))
+    # 'X liter per/voor (ca.) Y m²' — vangt ook 'is voldoende voor', 'genoeg voor'.
+    for m in re.finditer(r"(\d{1,3}(?:[.,]\d{1,2})?)\s*l(?:iter)?\b[^.;:!?]{0,40}?"
+                         r"(?:per|voor)\s*(?:ca\.?|circa|ongeveer|±)?\s*"
                          r"(\d{1,3}(?:[.,]\d{1,2})?)\s*m[²2]\b", t):
         liter = _parse_getal(m.group(1))
         opp = _parse_getal(m.group(2))
         if liter and opp and liter > 0 and opp > 0:
-            dekkingen.append(opp / liter)
-    for dek in dekkingen:
-        if 2.0 <= dek <= 25.0:
-            return round(1.0 / dek, 3)
+            kandidaten.append(("liter", liter / opp))
+    # Direct verbruik: 'X ml/l/g/kg per m²' (technische datasheets: '125 ml/m²').
+    for m in re.finditer(r"(\d{1,4}(?:[.,]\d{1,3})?)\s*(ml|milliliter|l|liter|g|gr|gram|kg)\s*"
+                         r"(?:per|/)\s*m[²2]\b", t):
+        w = _parse_getal(m.group(1))
+        eh = m.group(2)
+        if not w or w <= 0:
+            continue
+        if eh in ("ml", "milliliter"):
+            kandidaten.append(("liter", w / 1000.0))
+        elif eh in ("l", "liter"):
+            kandidaten.append(("liter", w))
+        elif eh in ("g", "gr", "gram"):
+            kandidaten.append(("kg", w / 1000.0))
+        else:
+            kandidaten.append(("kg", w))
+    doel = "kg" if inhoud_eenheid == "kg" else "liter"
+    for basis, w in kandidaten:
+        if basis != doel:
+            continue
+        if basis == "liter" and 0.04 <= w <= 0.5:
+            return round(w, 3)
+        if basis == "kg" and 0.05 <= w <= 3.0:
+            return round(w, 3)
+    return None
+
+
+def _parse_kit_rendement(tekst):
+    """Strekkende meters per kitkoker ('voldoende voor ± 12 meter', '12 m per koker').
+    Plausibel 2–40 m; daarbuiten None. Samen met de inhoud (ml) geeft dit het
+    verbruik per strekkende meter dat de kit-calculatie nodig heeft."""
+    if not tekst:
+        return None
+    t = tekst.lower().replace("\xa0", " ")
+    for pat in (r"(?:voldoende|geschikt|genoeg|goed)\s+voor\s*(?:ca\.?|circa|ongeveer|±)?\s*"
+                r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:strekkende\s*)?m(?:eter|¹|1)?\b",
+                r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:strekkende\s*)?m(?:eter|¹|1)?\s*per\s*"
+                r"(?:koker|tube|patroon|worst)"):
+        for m in re.finditer(pat, t):
+            w = _parse_getal(m.group(1))
+            if w and 2.0 <= w <= 40.0:
+                return w
     return None
 
 
@@ -426,6 +487,24 @@ def _parse_inhoud(tekst):
     return kandidaten[0]
 
 
+# Trefwoord-verankerd: 'Inhoud: 750 ml' / 'Verpakking 2,5 l' in een specificatietabel.
+_SPEC_INHOUD = re.compile(
+    r"(?:inhoud|verpakking|volume|netto(?:gewicht| gewicht)?)\s*[:\-]?\s*"
+    r"(\d{1,4}(?:[.,]\d{1,3})?)\s*"
+    r"(milliliter|kilogram|liter|litre|ltr|ml|cl|kg|gram|gr|meter|mtr|vel(?:len)?|"
+    r"rol(?:len)?|stuks?|l|m)\b", re.I)
+
+
+def _inhoud_uit_spec(tekst):
+    """Inhoud uit de zichtbare paginatekst, maar ALLEEN direct achter een spec-trefwoord
+    ('Inhoud', 'Verpakking', …). Losse maten elders op de pagina (gerelateerde producten,
+    verzenddrempels) tellen zo niet mee. Zelfde normalisatie als _parse_inhoud."""
+    m = _SPEC_INHOUD.search(tekst or "")
+    if not m:
+        return None, None, None
+    return _parse_inhoud(m.group(1) + " " + m.group(2))
+
+
 def _raad_eenheid(inh_eh, blob):
     b = (blob or "").lower()
     if re.search(r"koker|tube", b):
@@ -460,7 +539,8 @@ def _raad_categorie(blob):
                  r"plamuurmes|afbijt|verfbak|verfrooster|gereedschap|spaan|nivelleermes", b):
         return "Gereedschap"
     if re.search(r"verf\b|muurverf|plafondverf|lak\b|lakverf|grondlak|buitenlak|beits|coating|"
-                 r"\bmatt?\b|zijdeglans|hoogglans|emulsie|latex|betonverf|vloerverf|muurcoating", b):
+                 r"\bmatt?\b|zijdeglans|hoogglans|emulsie|latex|betonverf|vloerverf|muurcoating|"
+                 r"\bsatin\b|\bgloss\b|\beggshell\b|aflak", b):   # EN-glansgraden (S2U Nova Satin e.d.)
         return "Verf"
     return "Overig"
 
@@ -568,8 +648,15 @@ def product_uit_url(url, timeout=12):
     if prijs is not None:
         data["prijs"] = prijs
 
-    # — Inhoud + inhoud-eenheid (uit naam/omschrijving) —
-    inh, inh_eh, _eh_hint = _parse_inhoud((naam + "  " + blob).strip())
+    # — Inhoud + inhoud-eenheid —
+    #   1) naam/omschrijving/JSON-LD-specs; 2) terugval: trefwoord-verankerde
+    #   spec-regel ('Inhoud: 750 ml') in de zichtbare paginatekst — daar staat de
+    #   maat op shops die 'm niet in de naam of meta-tags zetten.
+    zichtbaar = _strip_tags(html_txt)
+    inh, inh_eh, _eh_hint = _parse_inhoud(
+        (naam + "  " + blob + "  " + (jsonld.get("specs") or "")).strip())
+    if inh is None:
+        inh, inh_eh, _eh_hint = _inhoud_uit_spec(zichtbaar)
     if inh is not None:
         data["inhoud"] = inh
         if inh_eh in INHOUD_EH_OPTIES:
@@ -593,12 +680,23 @@ def product_uit_url(url, timeout=12):
     data["categorie"] = cat if cat in CATEGORIE_OPTIES else "Overig"
     data["werkzaamheden"] = _raad_werkzaamheden(blob or naam, data["categorie"])
 
-    # — Verbruik per m² (uit dekkings-/rendementtekst) — alleen zinvol voor verf/primer
-    #   en alleen bij een plausibele dekking; anders weglaten (nooit een gok). —
+    # — Verbruik — in de eenheid die de calculatie verwacht: per m² voor verf/primer
+    #   (l/m² of kg/m²), per strekkende meter voor Kit (ml/m) en Afplakken (m tape/m).
+    #   Altijd alleen bij een plausibele waarde; anders weglaten (nooit een gok).
     if data["categorie"] in ("Verf", "Primer"):
-        _verbruik = _parse_verbruik(blob + "  " + _strip_tags(html_txt))
+        _verbruik = _parse_verbruik(blob + "  " + zichtbaar,
+                                    data.get("inhoud_eenheid", "liter"))
         if _verbruik is not None:
             data["verbruik"] = _verbruik
+    elif (data["categorie"] == "Kit" and data.get("inhoud")
+          and data.get("inhoud_eenheid") == "ml"):
+        # 'voldoende voor ± 12 meter' + kokerinhoud → ml per strekkende meter.
+        _meters = _parse_kit_rendement(blob + "  " + zichtbaar)
+        if _meters:
+            data["verbruik"] = round(data["inhoud"] / _meters, 1)
+    elif data["categorie"] == "Afplakken" and data.get("inhoud_eenheid") == "meter":
+        # Definitie, geen gok: 1 meter tape per afgeplakte strekkende meter.
+        data["verbruik"] = 1.0
 
     if not data.get("naam"):
         return {}, ("Productinformatie kon niet automatisch worden opgehaald. "
