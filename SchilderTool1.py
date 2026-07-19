@@ -1545,7 +1545,8 @@ REGELS
 - Vaste teksten van het bedrijf (voorwaarden, introzin, bedankje) zijn GEEN velden — die
   blijven gewoon in het sjabloon staan; koppel ze niet.
 
-UITVOER — UITSLUITEND geldige JSON, exact deze vorm (laat onbekende velden weg):
+UITVOER — UITSLUITEND geldige JSON, exact deze vorm. Staat een veld niet (herkenbaar)
+in het document → "gevonden_tekst": "" (lege string):
 {
   "velden": {
     "klantnaam": {"gevonden_tekst": "Jan de Vries", "zekerheid": "hoog"}
@@ -1684,23 +1685,128 @@ def _sjb_ai_model():
     return _sjb_secret("COATFLOW_AI_MODEL") or "claude-sonnet-5"
 
 
+def _sjb_herken_schema():
+    """JSON-schema voor structured outputs: dwingt het exacte herken-formaat af, met
+    alleen de bekende veld- en kolomnamen. Kost niets extra (zelfde aanroep/tokens);
+    het maakt de 'AI gaf geen geldige JSON'-fout onmogelijk."""
+    _veld = {
+        "type": "object",
+        "properties": {
+            "gevonden_tekst": {"type": "string"},
+            "zekerheid": {"type": "string", "enum": ["hoog", "midden", "laag"]},
+        },
+        "required": ["gevonden_tekst", "zekerheid"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "velden": {
+                "type": "object",
+                "properties": {v: _veld for v in SJABLOON_VELDEN},
+                "required": list(SJABLOON_VELDEN),
+                "additionalProperties": False,
+            },
+            "onderdelen_tabel": {
+                "type": "object",
+                "properties": {
+                    "gevonden": {"type": "boolean"},
+                    "tabel_index": {"type": "integer"},
+                    "kop_rij_index": {"type": "integer"},
+                    "gegevens_rij_indexen": {"type": "array", "items": {"type": "integer"}},
+                    "kolommen": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "index": {"type": "integer"},
+                                "veld": {"type": "string", "enum": list(SJABLOON_KOLOMMEN)},
+                                "zekerheid": {"type": "string", "enum": ["hoog", "midden", "laag"]},
+                            },
+                            "required": ["index", "veld", "zekerheid"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["gevonden", "tabel_index", "kop_rij_index",
+                             "gegevens_rij_indexen", "kolommen"],
+                "additionalProperties": False,
+            },
+            "twijfels": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["velden", "onderdelen_tabel", "twijfels"],
+        "additionalProperties": False,
+    }
+
+
+def _sjb_fout_uitleg(e):
+    """Technische fout → (begrijpelijke NL-melding, technisch detail of None).
+    De melding zegt wat de schilder kan DOEN; het ruwe detail komt klein eronder."""
+    detail = f"{type(e).__name__}: {e}"
+    t = str(e).lower()
+    if isinstance(e, ValueError) or (isinstance(e, RuntimeError) and "anthropic_api_key" in t):
+        return str(e), None      # eigen meldingen zijn al Nederlands en concreet
+    if "authentication" in t or "x-api-key" in t or "401" in t:
+        return ("De AI-sleutel wordt niet geaccepteerd. Controleer de ANTHROPIC_API_KEY "
+                "bij de omgevingsvariabelen (Railway → Variables).", detail)
+    if "credit" in t or "billing" in t or "purchase" in t:
+        return ("Het AI-tegoed is op. Vul het tegoed aan op console.anthropic.com en "
+                "probeer het daarna opnieuw.", detail)
+    if "rate_limit" in t or "429" in t:
+        return ("Even te veel aanvragen kort achter elkaar. Wacht een minuut en probeer "
+                "het opnieuw.", detail)
+    if "overloaded" in t or "529" in t:
+        return ("De AI-dienst is tijdelijk overbelast. Probeer het over een paar minuten "
+                "opnieuw.", detail)
+    if "timeout" in t or "connection" in t or "network" in t:
+        return ("Geen verbinding met de AI-dienst. Controleer de internetverbinding en "
+                "probeer het opnieuw.", detail)
+    return ("Het analyseren is niet gelukt. Probeer het opnieuw; blijft het misgaan, "
+            "sla het document dan opnieuw op als .docx en upload die versie.", detail)
+
+
+def _sjb_splits_velden(velden_ai):
+    """Splits de velden voor de controlekaart in (controleren, overig).
+    'Controleren' = wél gevonden maar niet met hoge zekerheid — het enige dat de
+    schilder echt moet nakijken. Zeker herkende én niet-gevonden velden gaan
+    ingeklapt onder 'Alle velden'. Elk item: (veld, label, gevonden_tekst, zekerheid)."""
+    controleren, overig = [], []
+    for veld, label in SJABLOON_VELDEN.items():
+        info = velden_ai.get(veld) or {}
+        gevonden = str(info.get("gevonden_tekst") or "").strip() if isinstance(info, dict) else ""
+        zek = str(info.get("zekerheid") or "") if isinstance(info, dict) else ""
+        (controleren if (gevonden and zek != "hoog") else overig).append((veld, label, gevonden, zek))
+    return controleren, overig
+
+
 def sjabloon_ai_herken(tekstblok):
-    """Eén AI-aanroep: documenttekst → herken-JSON (velden + onderdelen_tabel + twijfels)."""
+    """Eén AI-aanroep: documenttekst → herken-JSON (velden + onderdelen_tabel + twijfels).
+    Structured outputs dwingen het exacte JSON-formaat af; een model/omgeving zonder die
+    ondersteuning valt automatisch terug op het vrije-tekst-pad (prompt vraagt daar al
+    om strikte JSON) — nooit slechter dan voorheen."""
     key = _sjb_api_key()
     if not key:
         raise RuntimeError("Geen Anthropic API-sleutel gevonden. Zet ANTHROPIC_API_KEY "
                            "als omgevingsvariabele (Railway → Variables) of in secrets.")
     import anthropic
     cl = anthropic.Anthropic(api_key=key)
-    msg = cl.messages.create(
-        model=_sjb_ai_model(), max_tokens=4096,
-        system=_AI_HERKEN_PROMPT,
-        messages=[{"role": "user", "content": tekstblok[:150000]}],
-    )
+    _basis = dict(model=_sjb_ai_model(), max_tokens=4096, system=_AI_HERKEN_PROMPT,
+                  messages=[{"role": "user", "content": tekstblok[:150000]}])
+    try:
+        msg = cl.messages.create(
+            output_config={"format": {"type": "json_schema", "schema": _sjb_herken_schema()}},
+            **_basis)
+    except anthropic.BadRequestError:
+        msg = cl.messages.create(**_basis)
+    # Afgekapt antwoord (extreem groot document) → duidelijke melding i.p.v. JSON-fout.
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        raise ValueError("Het document is te groot om in één keer te herkennen. Haal extra "
+                         "pagina's of overbodige voorbeeldrijen uit het voorbeelddocument "
+                         "en upload het opnieuw.")
     txt = "".join(getattr(b, "text", "") for b in msg.content)
     s, e = txt.find("{"), txt.rfind("}")
     if s < 0 or e <= s:
-        raise ValueError("AI gaf geen geldige JSON terug — probeer het opnieuw.")
+        raise ValueError("De AI gaf een onleesbaar antwoord terug — probeer de upload opnieuw.")
     return json.loads(txt[s:e + 1])
 
 
@@ -2033,7 +2139,12 @@ def _render_sjabloon_kaart(soort):
                             "bytes": raw, "naam": up.name, "ai": ai, "tabellen": tabellen}
                         st.session_state[f"sjb_sig_{soort}"] = sig
                     except Exception as e:
-                        ui_alert(f"Analyse mislukt: {e}", "error")
+                        _melding, _detail = _sjb_fout_uitleg(e)
+                        ui_alert(_melding, "error")
+                        if _detail:
+                            st.markdown(
+                                f'<div style="font-size:11px;color:#94A3B8;margin:-2px 0 8px 2px;">'
+                                f'Technisch detail: {h(_detail)}</div>', unsafe_allow_html=True)
 
         voorstel = st.session_state.get(f"sjb_voorstel_{soort}")
         if not voorstel:
@@ -2043,25 +2154,41 @@ def _render_sjabloon_kaart(soort):
         tai = ai.get("onderdelen_tabel") or {}
         tabellen = voorstel.get("tabellen") or []
 
-        st.markdown('<div style="font-size:13.5px;font-weight:700;color:#0F172A;margin:6px 0 2px;">'
-                    'Controleer de herkenning</div>'
-                    '<div style="font-size:12px;color:#94A3B8;margin-bottom:8px;">Leeg = niet vervangen. '
-                    'De tekst moet <strong>letterlijk</strong> zo in het document staan.</div>',
+        # Compacte controle: alleen twijfelgevallen open; zeker herkend + niet gevonden
+        # ingeklapt onder 'Alle velden' — van een muur van 24 velden naar een korte check.
+        _controleren, _overig = _sjb_splits_velden(velden_ai)
+        _n_herkend = sum(1 for _t in (_controleren + _overig) if _t[2])
+        if _controleren:
+            _kop, _sub = (f"Controleer deze {len(_controleren)} veld(en)",
+                          "De rest is met hoge zekerheid herkend en staat onder ‘Alle velden’.")
+        else:
+            _kop, _sub = ("Herkenning gelukt",
+                          f"{_n_herkend} velden met hoge zekerheid herkend — sla op, of kijk ze eerst na.")
+        st.markdown(f'<div style="font-size:13.5px;font-weight:700;color:#0F172A;margin:6px 0 2px;">{_kop}</div>'
+                    f'<div style="font-size:12px;color:#94A3B8;margin-bottom:8px;">{_sub} '
+                    'Leeg = niet vervangen; de tekst moet <strong>letterlijk</strong> zo in het document staan.</div>',
                     unsafe_allow_html=True)
         for tw in (ai.get("twijfels") or [])[:6]:
             st.caption(f"⚠️ {tw}")
 
         with st.form(f"sjb_form_{soort}"):
             veld_invoer = {}
-            _kol_l, _kol_r = st.columns(2)
-            for i, (veld, label) in enumerate(SJABLOON_VELDEN.items()):
-                info = velden_ai.get(veld) or {}
-                gevonden = str(info.get("gevonden_tekst") or "") if isinstance(info, dict) else ""
-                zek = str(info.get("zekerheid") or "") if isinstance(info, dict) else ""
-                suffix = {"hoog": " ✓", "midden": " · controleer", "laag": " · ⚠ onzeker"}.get(zek, "")
-                with (_kol_l if i % 2 == 0 else _kol_r):
-                    veld_invoer[veld] = st.text_input(label + suffix, value=gevonden,
-                                                      key=f"sjb_v_{soort}_{veld}")
+
+            def _render_velden(items):
+                _kol_l, _kol_r = st.columns(2)
+                for i, (veld, label, gevonden, zek) in enumerate(items):
+                    suffix = ({"hoog": " ✓", "midden": " · controleer", "laag": " · ⚠ onzeker"}.get(zek, "")
+                              if gevonden else "")
+                    with (_kol_l if i % 2 == 0 else _kol_r):
+                        veld_invoer[veld] = st.text_input(label + suffix, value=gevonden,
+                                                          key=f"sjb_v_{soort}_{veld}")
+
+            if _controleren:
+                _render_velden(_controleren)
+            _n_ov = sum(1 for _t in _overig if _t[2])
+            with st.expander(f"Alle velden tonen · {_n_ov} zeker herkend · "
+                             f"{len(_overig) - _n_ov} niet gevonden"):
+                _render_velden(_overig)
 
             kol_keuze = {}
             t_idx = int(tai.get("tabel_index", 0) or 0)
@@ -2120,7 +2247,12 @@ def _render_sjabloon_kaart(soort):
                 st.toast(f"Eigen {lbl}sjabloon opgeslagen!", icon="✅")
                 st.rerun()
             except Exception as e:
-                ui_alert(f"Sjabloon opslaan mislukt: {e}", "error")
+                ui_alert("Het sjabloon kon niet worden opgebouwd. Controleer of het bestand "
+                         "een normaal Word-document (.docx) is en probeer het opnieuw.", "error")
+                st.markdown(
+                    f'<div style="font-size:11px;color:#94A3B8;margin:-2px 0 8px 2px;">'
+                    f'Technisch detail: {h(f"{type(e).__name__}: {e}")}</div>',
+                    unsafe_allow_html=True)
 
 
 def ui_alert(msg, type="success"):
