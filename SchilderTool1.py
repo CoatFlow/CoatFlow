@@ -5965,7 +5965,11 @@ elif selected == "Projecten":
     .pj-badge.geannuleerd{background:#FEE2E2;color:#991B1B;}.pj-badge.geannuleerd .pj-badge-dot{background:#EF4444;}
     /* ── Projectkaarten: witte achtergrond + schaduw (outer container only) ── */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has([data-testid="stColumn"]:nth-child(4)){background:#FFFFFF !important;border-radius:12px !important;box-shadow:0 1px 3px rgba(0,0,0,0.04) !important;border:1px solid transparent !important;margin-bottom:6px !important;}
-    [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has([data-testid="stColumn"]:nth-child(4))>[data-testid="stVerticalBlock"]{background:#FFFFFF !important;border-color:transparent !important;}
+    /* Het witte binnenblok MOET de ronding van de kaart overnemen (border-radius:inherit).
+       Zonder dat had het een eigen, scherpere 8px-hoek en stak het door de 12px-ronding
+       van de kaart heen: de hoeken oogden vierkant en de blauwe hover-gloed leek de
+       hoeken over te slaan (gemeten: op 3px van de hoek werd het binnenblok geschilderd). */
+    [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has([data-testid="stColumn"]:nth-child(4))>[data-testid="stVerticalBlock"]{background:#FFFFFF !important;border-color:transparent !important;border-radius:inherit !important;}
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has([data-testid="stColumn"]:nth-child(4)):hover{box-shadow:0 4px 12px rgba(37,99,235,0.10) !important;border-color:#BFDBFE !important;}
     /* ── Bekijken knop: donker (scoped op projectkaarten) ── */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has([data-testid="stColumn"]:nth-child(4)) [data-testid="stBaseButton-secondary"]{background:#081A36 !important;color:white !important;font-size:12px !important;font-weight:600 !important;border:none !important;border-radius:8px !important;box-shadow:none !important;white-space:nowrap !important;overflow:hidden !important;}
@@ -6069,6 +6073,10 @@ elif selected == "Projecten":
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stVerticalBlock"],
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stMarkdownContainer"],
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stHorizontalBlock"]{background:#FFFFFF !important;border:none !important;box-shadow:none !important;}
+    /* Het witte binnenblok neemt de 18px-ronding over; zonder dit schilderde het met
+       vierkante hoeken over de ronding van de kaart heen en oogde de kaart hoekiger
+       dan de andere cards (.pd-card, ook 18px). Zelfde oorzaak als bij de projectkaarten. */
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) > [data-testid="stVerticalBlock"]{border-radius:inherit !important;}
     /* FIX wit blok IN de 'Toon alle toeslagen' expander-knop: het label-container mag
        niet wit gemaakt worden door de regel hierboven — transparant houden. */
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stExpander"] [data-testid="stMarkdownContainer"]{background:transparent !important;}
