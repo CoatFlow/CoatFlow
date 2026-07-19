@@ -391,6 +391,10 @@ def require_auth():
     """Blokkeer de hele app tot de gebruiker is ingelogd."""
     if st.session_state.get("authenticated"):
         return
+    # Login-CSS als ALLEREERSTE element — vóór alles wat een component-iframe rendert
+    # (de cookie-controller in _clear_cookie/_read_cookie). Stond dit erna, dan hing dat
+    # iframe een paar tellen ongestyled bovenaan: de witte balk die soms opflikkerde.
+    _inject_login_css()
     # Sticky (niet-poppen): zolang deze pagina-sessie draait NOOIT auto-herstellen na
     # een expliciete uitlog, ook al staat de stale cookie nog in st.context.cookies.
     if st.session_state.get("_logged_out"):
@@ -403,7 +407,10 @@ def require_auth():
         st.stop()
     try_restore_session()    # page-refresh → bewaarde sessie terughalen
     if st.session_state.get("authenticated"):
-        return
+        # Herstel gelukt: schoon opnieuw draaien. De login-CSS hierboven is al gerenderd
+        # en zou anders over de ingelogde app heen blijven liggen. De volgende run valt
+        # meteen op de early-return bovenaan → geen login-CSS, geen lus.
+        st.rerun()
     _render_login()
     st.stop()
 
@@ -584,7 +591,7 @@ def _inject_login_css():
 
 
 def _render_login():
-    _inject_login_css()
+    # (CSS wordt al vóór de cookie-componenten geïnjecteerd in require_auth().)
     view = st.session_state.get("cf_auth_view", "login")
 
     def _feat(ic, title, desc):

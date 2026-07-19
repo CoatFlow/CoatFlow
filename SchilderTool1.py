@@ -1926,8 +1926,13 @@ def _render_sjabloon_kaart(soort):
             _c_up, _c_del = st.container(), None
 
         with _c_up:
+            # Nonce in de key: na opslaan/annuleren moet het uploadvak ECHT leeg zijn.
+            # Zonder dat bleef het bestand in de widget staan, werd de handtekening
+            # opnieuw vergeleken en analyseerde de app hetzelfde document nog een keer —
+            # de controlekaart kwam dan meteen weer terug (én dat kostte een AI-aanroep).
+            _nc = st.session_state.get(f"sjb_nonce_{soort}", 0)
             up = st.file_uploader(f"Voorbeeld-{lbl} (.docx)", type=["docx"],
-                                  key=f"sjb_up_{soort}", label_visibility="collapsed")
+                                  key=f"sjb_up_{soort}_{_nc}", label_visibility="collapsed")
         if _c_del is not None:
             with _c_del:
                 if st.button("Verwijderen", key=f"sjb_del_{soort}", use_container_width=True):
@@ -2014,6 +2019,8 @@ def _render_sjabloon_kaart(soort):
         if annuleren:
             for k in (f"sjb_voorstel_{soort}", f"sjb_sig_{soort}"):
                 st.session_state.pop(k, None)
+            st.session_state[f"sjb_nonce_{soort}"] = \
+                st.session_state.get(f"sjb_nonce_{soort}", 0) + 1
             st.rerun()
         if opslaan:
             mapping = {"velden": {v: t.strip() for v, t in veld_invoer.items() if (t or "").strip()},
@@ -2031,6 +2038,8 @@ def _render_sjabloon_kaart(soort):
                 sjabloon_opslaan(soort, nieuw, meta)
                 for k in (f"sjb_voorstel_{soort}", f"sjb_sig_{soort}"):
                     st.session_state.pop(k, None)
+                st.session_state[f"sjb_nonce_{soort}"] = \
+                    st.session_state.get(f"sjb_nonce_{soort}", 0) + 1
                 st.toast(f"Eigen {lbl}sjabloon opgeslagen!", icon="✅")
                 st.rerun()
             except Exception as e:
@@ -4208,6 +4217,18 @@ div[data-testid="stTextInput"] input[placeholder*="Zoek"] {
 # components.html() omzeilt dit door CSS via JS in het parent-document te zetten.
 _BI_CDN = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
 _css_json = json.dumps(_APP_CSS)
+
+# ── KRITIEKE LAYOUT-CSS: synchroon (st.html = direct in het document) en zo vroeg
+# mogelijk in het script. De basis-CSS hieronder gaat via een component-iframe en is dus
+# per definitie async; de bovenruimte-regel stond daarnaast in de SIDEBAR, die merkbaar
+# later mount dan de paginainhoud. Gevolg: bij een koude start schilderde het dashboard
+# soms (en soms blijvend) met Streamlit's standaard 6rem lege ruimte bovenaan.
+st.html("""<style>
+/* stHtml-containers dragen alleen CSS → mogen geen enkele ruimte innemen (ook deze niet). */
+[data-testid="stElementContainer"]:has(> [data-testid="stHtml"]){display:none !important;}
+/* Bovenruimte pagina's: de Streamlit-header is verborgen, dus 6rem is pure lege ruimte. */
+[data-testid="stMainBlockContainer"], .block-container{padding-top:3rem !important;}
+</style>""")
 # PERF: de basis-CSS (~33 KB) verandert NIET tussen reruns. 'm elke rerun opnieuw via
 # een component-iframe injecteren = onnodig 33 KB over de websocket + een volledige
 # style-recalc van de pagina bij ELKE klik (client-side de grootste kostenpost, ~2-3s
@@ -4322,8 +4343,8 @@ with st.sidebar:
     /* Logo/titel klikbaar → Dashboard: de bijbehorende verborgen knop niet tonen (JS koppelt de klik). */
     [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.nav-home-mk),
     [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.nav-home-mk)+[data-testid="stElementContainer"]{display:none !important;height:0 !important;margin:0 !important;}
-    /* Bovenruimte pagina's subtiel verkleinen (Streamlit-header is verborgen → 6rem is pure lege ruimte). */
-    [data-testid="stMainBlockContainer"], .block-container{padding-top:3rem !important;}
+    /* (Bovenruimte pagina's staat nu in het kritieke layout-blok vóór de sidebar —
+       hier stond 'ie te laat: de sidebar mount merkbaar later dan de paginainhoud.) */
     /* FIX 4: agenda-card chrome SYNCHROON (st.html → direct in document, geen iframe-FOUC),
        zodat de afgeronde hoeken er vanaf de eerste render staan — geen flicker. Zelfde
        radius (14px) als .db-stat-card / .db-section. De gedetailleerde agenda-styling blijft
