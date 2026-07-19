@@ -53,34 +53,100 @@ _WEBSHOP_SUFFIX = ("gamma", "karwei", "praxis", "hornbach", "hubo", "bauhaus", "
                    "verfwebwinkel", "verfwinkel", "verfshop", "verfbestellen", "verf.nl",
                    "bol.com", "bol", "toolstation", "verfgigant", "verfcompleet")
 
+# Gerichte foutmeldingen: zeg wat er aan de hand is én wat de schilder kan doen.
+# De import blokkeert nooit het formulier — handmatig invullen kan altijd.
 _FOUT_GENERIEK = ("Productinformatie kon niet automatisch worden opgehaald. "
                   "Controleer de URL of vul de gegevens handmatig in.")
+_FOUT_URL = ("Dit lijkt geen geldige productlink. Plak de volledige link uit de "
+             "adresbalk (bv. https://www.winkel.nl/product/…).")
+_FOUT_VERBINDING = ("Kon geen verbinding maken met de website. Controleer of de link "
+                    "klopt en of er internetverbinding is.")
+_FOUT_TRAAG = "De website reageert te traag. Probeer het over een moment nog eens."
+_FOUT_404 = "Deze pagina bestaat niet (meer). Controleer of de link klopt."
+_FOUT_GEBLOKKEERD = ("Deze website blokkeert automatisch ophalen door programma's. "
+                     "Vul de gegevens handmatig in — dat werkt altijd.")
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 CoatFlow/1.0")
+       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
 # ============================================================
-# 1) Netwerk — HTML ophalen (requests of stdlib-urllib)
+# 1) Netwerk — HTML ophalen (requests; stdlib-urllib als noodpad)
 # ============================================================
-def _haal_html(url, timeout=12, max_bytes=3_000_000):
-    """Returnt (html_text, fout|None). Vangt alle netwerk-/SSL-/timeoutfouten."""
-    headers = {"User-Agent": _UA, "Accept-Language": "nl,en;q=0.8",
-               "Accept": "text/html,application/xhtml+xml"}
+def _haal_html(url, timeout=12, max_bytes=2_000_000):
+    """Returnt (html_text, fout|None). Onderscheidt fouten die de schilder kan
+    oplossen (verkeerde link, geen verbinding) van blokkades/storingen, en probeert
+    het bij een timeout of verbindingsfout één keer opnieuw."""
+    headers = {
+        "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.7",
+    }
     try:
+        import requests
+    except ImportError:                    # hoort niet voor te komen (Streamlit-dep)
+        return _haal_html_urllib(url, headers, timeout, max_bytes)
+
+    fout = _FOUT_GENERIEK
+    for _poging in (1, 2):                 # 2e poging alleen na timeout/verbindingsfout
         try:
-            import requests
-            resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-            if resp.status_code >= 400:
+            try:
+                resp = requests.get(url, headers=headers, timeout=timeout,
+                                    allow_redirects=True)
+            except requests.exceptions.Timeout:
+                fout = _FOUT_TRAAG
+                continue
+            except requests.exceptions.ConnectionError:
+                fout = _FOUT_VERBINDING
+                continue
+            status = resp.status_code
+            if status in (401, 403, 429, 503):
+                return None, _FOUT_GEBLOKKEERD     # WAF/botbeveiliging of tijdelijk plat
+            if status in (404, 410):
+                return None, _FOUT_404
+            if status >= 400:
                 return None, _FOUT_GENERIEK
-            resp.encoding = resp.encoding or resp.apparent_encoding or "utf-8"
-            return (resp.text or "")[: max_bytes * 2], None
-        except ImportError:
-            import urllib.request
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                raw = r.read(max_bytes)
-            return raw.decode("utf-8", "replace"), None
+            # Zonder charset in de Content-Type-header kiest requests latin-1 →
+            # mojibake ('Ã«' i.p.v. 'ë'). Dan zelf detecteren, met utf-8 als vangnet.
+            ct = (resp.headers.get("content-type") or "").lower()
+            if "charset" not in ct:
+                try:
+                    resp.encoding = resp.apparent_encoding or "utf-8"
+                except Exception:
+                    resp.encoding = "utf-8"
+            tekst = (resp.text or "")[:max_bytes]
+            if not tekst.strip():
+                return None, _FOUT_GENERIEK        # lege pagina
+            return tekst, None
+        except Exception:
+            return None, _FOUT_GENERIEK
+    return None, fout
+
+
+def _haal_html_urllib(url, headers, timeout, max_bytes):
+    """Noodpad zonder 'requests'. Zelfde foutonderscheid, geen retry."""
+    import socket
+    import urllib.error
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read(max_bytes)
+        tekst = raw.decode("utf-8", "replace")
+        return (tekst, None) if tekst.strip() else (None, _FOUT_GENERIEK)
+    except urllib.error.HTTPError as e:
+        code = getattr(e, "code", 0)
+        if code in (401, 403, 429, 503):
+            return None, _FOUT_GEBLOKKEERD
+        if code in (404, 410):
+            return None, _FOUT_404
+        return None, _FOUT_GENERIEK
+    except socket.timeout:
+        return None, _FOUT_TRAAG
+    except urllib.error.URLError as e:
+        if isinstance(getattr(e, "reason", None), socket.timeout):
+            return None, _FOUT_TRAAG
+        return None, _FOUT_VERBINDING
     except Exception:
         return None, _FOUT_GENERIEK
 
@@ -161,10 +227,15 @@ def _extract_jsonld(html_txt):
     for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
                          html_txt, re.S | re.I):
         raw = (m.group(1) or "").strip()
+        # Sommige shops wikkelen de JSON in CDATA of HTML-commentaar — eraf strippen.
+        raw = re.sub(r"^\s*(?:/\*|//)?\s*(?:<!\[CDATA\[|<!--)\s*(?:\*/)?", "", raw)
+        raw = re.sub(r"(?:/\*|//)?\s*(?:\]\]>|-->)\s*(?:\*/)?\s*$", "", raw).strip()
         if not raw:
             continue
         try:
-            obj = json.loads(raw)
+            # strict=False: accepteer rauwe control-characters in strings (komt voor
+            # in omschrijvingen) die de strikte parser anders laten struikelen.
+            obj = json.loads(raw, strict=False)
         except Exception:
             continue
         for node in _jsonld_nodes(obj):
@@ -205,9 +276,39 @@ def _extract_title(html_txt):
     return _unescape(re.sub(r"\s+", " ", m.group(1))) if m else ""
 
 
+def _extract_microdata(html_txt):
+    """schema.org-microdata op WILLEKEURIGE tags: <span itemprop="price" content="12,34">.
+    Magento-/Shopware-shops zetten de prijs zo in de HTML i.p.v. in JSON-LD of meta-tags
+    (_extract_meta ziet alleen <meta>-tags). Alleen content-attributen — nooit de vrije
+    tekst tussen de tags — zodat een doorgestreepte van-prijs niet meegepakt wordt."""
+    out = {}
+    for m in re.finditer(r"<[a-zA-Z][^>]*\bitemprop\s*=\s*[\"'](price|name|brand)[\"'][^>]*>",
+                         html_txt, re.I):
+        prop = m.group(1).lower()
+        c = re.search(r'\bcontent\s*=\s*["\']([^"\']*)["\']', m.group(0), re.I)
+        if c and c.group(1).strip():
+            out.setdefault(prop, _unescape(c.group(1)))
+    return out
+
+
+def _extract_h1(html_txt):
+    """Eerste <h1> — op productpagina's vrijwel altijd de kale productnaam, zonder de
+    SEO-ruis ('… kopen? | Bestel online') die in <title> zit."""
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html_txt, re.S | re.I)
+    if not m:
+        return ""
+    return _unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1)))).strip()
+
+
 def _prijs_uit_tekst(html_txt):
-    """Eerste plausibele €-bedrag met 2 decimalen in de pagina-tekst."""
-    for m in re.finditer(r"(?:€|&euro;|EUR)\s*([0-9][0-9.  ]*[.,][0-9]{2})\b", html_txt):
+    """Laatste redmiddel: eerste plausibele €-bedrag in de paginatekst — maar sla bedragen
+    over die bij verzendkosten/kortingsdrempels horen ('gratis verzending vanaf
+    € 50,00'), anders wordt zo'n drempel per ongeluk de productprijs."""
+    for m in re.finditer(r"(?:€|&euro;|EUR)\s*([0-9][0-9.   ]*[.,][0-9]{2})\b", html_txt):
+        context = html_txt[max(0, m.start() - 30):m.start()].lower()
+        if re.search(r"verzend|bezorg|vanaf|retour|cadeau|tegoed|korting|bespaar|adviesprijs",
+                     context):
+            continue
         p = _parse_prijs(m.group(1))
         if p:
             return p
@@ -409,6 +510,11 @@ def product_uit_url(url, timeout=12):
         return {}, "Plak eerst een product-URL."
     if not re.match(r"^https?://", url, re.I):
         url = "https://" + url
+    # Sanity-check op de hostnaam vóór het netwerk in te gaan: 'hallo' of een
+    # zin met spaties is geen link → meteen een duidelijke melding, geen DNS-fout.
+    _host = re.match(r"^https?://([^/:?#]+)", url, re.I)
+    if not _host or "." not in _host.group(1) or " " in _host.group(1):
+        return {}, _FOUT_URL
 
     html_txt, fout = _haal_html(url, timeout=timeout)
     if not html_txt:
@@ -418,14 +524,23 @@ def product_uit_url(url, timeout=12):
         jsonld = _extract_jsonld(html_txt)
         meta = _extract_meta(html_txt)
         titel = _extract_title(html_txt)
+        micro = _extract_microdata(html_txt)
     except Exception:
-        jsonld, meta, titel = {}, {}, ""
+        jsonld, meta, titel, micro = {}, {}, "", {}
+
+    # Botbeveiliging met status 200 (Cloudflare-challenge e.d.): herkenbaar aan de
+    # titel. VÓÓR de naamextractie afvangen, anders wordt 'Just a moment...' de
+    # productnaam en krijgt de schilder een onbruikbaar 'succes'.
+    if re.search(r"just a moment|attention required|access denied|are you a robot|"
+                 r"een ogenblik|verifieer dat u|captcha", titel or "", re.I):
+        return {}, _FOUT_GEBLOKKEERD
 
     data = {}
 
-    # — Naam —
+    # — Naam — (h1 vóór <title>: de titel bevat SEO-ruis die h1 niet heeft)
     naam = _schoon_naam(jsonld.get("naam") or meta.get("og:title")
-                        or meta.get("twitter:title") or titel or "")
+                        or meta.get("twitter:title") or micro.get("name")
+                        or _extract_h1(html_txt) or titel or "")
     if naam:
         data["naam"] = naam
 
@@ -436,16 +551,20 @@ def product_uit_url(url, timeout=12):
     # — Merk: maak de productnaam completer (prefix als het merk ontbreekt). Bron:
     #   schema.org brand of een bekend NL/BE-merk in de tekst. Er is geen apart merk-veld
     #   in het formulier; het merk verbetert uitsluitend de naam en de herkenning.
-    merk = (jsonld.get("merk") or "").strip() or (_raad_merk(blob or naam) or "")
+    merk = ((jsonld.get("merk") or "").strip()
+            or (micro.get("brand") or "").strip()
+            or (meta.get("product:brand") or "").strip()
+            or (_raad_merk(blob or naam) or ""))
     if merk and naam and merk.lower() not in naam.lower():
         naam = (merk + " " + naam)[:80].strip()
         data["naam"] = naam
         blob = merk + " " + blob
 
     # — Prijs (alleen indien gevonden; anders weglaten = leeg laten) —
+    #   Bronvolgorde op betrouwbaarheid: JSON-LD → meta-tags → microdata → paginatekst.
     prijs = _parse_prijs(jsonld.get("prijs") or meta.get("product:price:amount")
                          or meta.get("og:price:amount") or meta.get("product:price")
-                         or _prijs_uit_tekst(html_txt))
+                         or micro.get("price") or _prijs_uit_tekst(html_txt))
     if prijs is not None:
         data["prijs"] = prijs
 
@@ -465,7 +584,12 @@ def product_uit_url(url, timeout=12):
                                   "vel": "vel", "kg": "kg", "stuk": "stuk"}.get(eenheid, "liter")
 
     # — Categorie + werkzaamheden (altijd een voorstel) —
-    cat = _raad_categorie(blob or naam)
+    #   Eerst op de productNAAM (sterkste signaal), pas daarna op de omschrijving:
+    #   een muurverf-omschrijving noemt vaak 'aanbrengen met roller of kwast' en werd
+    #   daardoor ten onrechte Gereedschap (gezien bij Karwei/Flexa EasyCare).
+    cat = _raad_categorie(naam)
+    if cat == "Overig":
+        cat = _raad_categorie(blob or naam)
     data["categorie"] = cat if cat in CATEGORIE_OPTIES else "Overig"
     data["werkzaamheden"] = _raad_werkzaamheden(blob or naam, data["categorie"])
 

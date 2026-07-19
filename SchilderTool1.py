@@ -8836,9 +8836,20 @@ elif selected == "Producten":
                                 continue  # onbekende optie → overslaan (nooit crashen)
                             st.session_state[_key] = _w
                         _nm = (_data.get("naam") or "")[:55]
-                        st.session_state["pn_import_flash"] = ("success",
-                            f"Productgegevens opgehaald voor ‘{_nm}’. Controleer de velden "
-                            f"hieronder en pas aan waar nodig.")
+                        # Benoem expliciet wat NIET gevonden is (prijs/inhoud) — anders
+                        # blijft een prijs van € 0 onopgemerkt in het formulier staan.
+                        _mis = [lbl for veld, lbl in (("prijs", "de prijs"),
+                                                      ("inhoud", "de inhoud"))
+                                if veld not in _data]
+                        if _mis:
+                            st.session_state["pn_import_flash"] = ("warning",
+                                f"Productgegevens opgehaald voor ‘{_nm}’, maar "
+                                f"{' en '.join(_mis)} kon(den) niet gevonden worden — "
+                                f"vul die hieronder zelf in.")
+                        else:
+                            st.session_state["pn_import_flash"] = ("success",
+                                f"Productgegevens opgehaald voor ‘{_nm}’. Controleer de "
+                                f"velden hieronder en pas aan waar nodig.")
                 st.rerun()
 
         _flash = st.session_state.pop("pn_import_flash", None)
