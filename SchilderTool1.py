@@ -301,53 +301,39 @@ def _markeer_uren_touched(flag_key, waarde_key=None, auto_key=None):
         st.session_state[flag_key] = True
 
 
-def _herstel_auto_uren(flag_key, waarde_key, auto_key):
-    """↻-knop: override loslaten en terug naar de automatisch berekende uren."""
-    st.session_state[flag_key] = False
-    st.session_state[waarde_key] = float(st.session_state.get(auto_key, 0) or 0)
-
-
-def render_arbeidsuren(auto_uren, waarde_key, touched_key, label="Arbeidsuren",
-                       label_visibility="visible", help=None, knop_naast=True):
+def render_arbeidsuren(auto_uren, dim_sig, waarde_key, touched_key, label="Arbeidsuren",
+                       label_visibility="visible", help=None):
     """Gedeeld Arbeidsuren-veld (Calculaties + Projecten > Onderdeel toevoegen).
 
-    Volgt automatisch de afmetingen tot de gebruiker zelf een afwijkende waarde invult;
-    het ↻-knopje (of het terugzetten van de berekende waarde) hervat het automatisch
-    meerekenen. Retourneert de te gebruiken urenwaarde.
+    Het veld toont de automatisch berekende uren en kan daar nooit op vastlopen: zodra
+    de berekening verandert (andere m²/m¹/lagen/werkzaamheden/houtwerk) neemt het veld
+    die nieuwe waarde over. Je kunt er tussendoor je eigen inschatting in zetten; die
+    blijft staan zolang je verder niets aan de afmetingen wijzigt.
 
-    `knop_naast=False` zet de knop ONDER het veld in plaats van ernaast. Nodig in het
-    onderdeel-formulier: dat staat al twee kolomniveaus diep (col_main > oc1) en een
-    derde niveau is smal én afgeraden door Streamlit voor kleine schermen."""
-    auto_key = waarde_key + "_auto"
-    st.session_state[auto_key] = float(auto_uren)
+    Voorheen ging het veld na één handmatige aanpassing PERMANENT op slot — de uren
+    liepen dan niet meer mee met m²/m¹ en leken kapot. Retourneert de urenwaarde.
+
+    `dim_sig` is een tuple van de afmetingen waarop de uren gebaseerd zijn. Wijzigt die,
+    dan laat het veld een handmatige waarde los. Bewust NIET op de berekende uren zelf
+    vergelijken: die zijn afgerond op 0,1 uur, dus een kleine wijziging (bv. 4 → 5 m¹)
+    gaf dezelfde uitkomst en dan bleef het veld ten onrechte hangen."""
+    auto_uren = float(auto_uren)
+    auto_key  = waarde_key + "_auto"
+    vorig_key = waarde_key + "_vorige_dims"
+
+    # Afmetingen gewijzigd → eventuele handmatige waarde loslaten en weer meelopen.
+    if st.session_state.get(vorig_key) != dim_sig:
+        st.session_state[vorig_key] = dim_sig
+        st.session_state[touched_key] = False
+    st.session_state[auto_key] = auto_uren
     if not st.session_state.get(touched_key, False):
-        st.session_state[waarde_key] = float(auto_uren)
-    _handmatig = bool(st.session_state.get(touched_key, False))
+        st.session_state[waarde_key] = auto_uren
 
-    def _invoer():
-        return st.number_input(
-            label, min_value=0.0, step=0.5, format="%.1f", key=waarde_key,
-            label_visibility=label_visibility,
-            on_change=_markeer_uren_touched, args=(touched_key, waarde_key, auto_key),
-            help=help)
-
-    def _knop():
-        st.button("↻  Auto" if not knop_naast else "↻",
-                  key=waarde_key + "_reset", use_container_width=True,
-                  disabled=not _handmatig,
-                  on_click=_herstel_auto_uren, args=(touched_key, waarde_key, auto_key),
-                  help=f"Terug naar de automatisch berekende uren ({auto_uren:.1f}).")
-
-    if knop_naast:
-        _c_in, _c_bt = st.columns([4, 1], vertical_alignment="bottom")
-        with _c_in:
-            uren = _invoer()
-        with _c_bt:
-            _knop()
-    else:
-        uren = _invoer()
-        _knop()
-    return uren
+    return st.number_input(
+        label, min_value=0.0, step=0.5, format="%.1f", key=waarde_key,
+        label_visibility=label_visibility,
+        on_change=_markeer_uren_touched, args=(touched_key, waarde_key, auto_key),
+        help=help)
 
 def bereken_verpakkingen(benodigd, inhoud):
     """Aantal verpakkingen = benodigd materiaal ÷ inhoud (naar boven afgerond).
@@ -6605,8 +6591,9 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                             _auto_uren = round(auto_arbeidsuren(ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Arbeidsuren <span style="color:#94A3B8;font-weight:400;">· auto, aanpasbaar</span></div>', unsafe_allow_html=True)
                             ond_uren = render_arbeidsuren(
-                                _auto_uren, _uren_key, _uren_touched_key,
-                                label_visibility="collapsed", knop_naast=False)
+                                _auto_uren, (tuple(ond_wz), _uren_m2, _uren_lagen, _eff_meters),
+                                _uren_key, _uren_touched_key,
+                                label_visibility="collapsed")
                         # ── MIDDEN: DYNAMISCHE afmetingen — alleen de velden die bij de selectie horen ──
                         with oc2:
                             st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Afmetingen</div>', unsafe_allow_html=True)
@@ -7352,9 +7339,11 @@ elif selected == "Calculaties":
             calc_marge = st.slider("Winstmarge %", 0, 60, key="calc_marge")
             _calc_auto_uren = round(auto_arbeidsuren(calc_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2), 1)
             calc_uren = render_arbeidsuren(
-                _calc_auto_uren, "calc_uren", "calc_uren_touched",
-                help="Automatisch berekend uit de afmetingen; pas aan voor je eigen "
-                     "ureninschatting. Met ↻ ernaast keer je terug naar de berekening.")
+                _calc_auto_uren, (tuple(calc_wz), _uren_m2, _uren_lagen, _eff_meters),
+                "calc_uren", "calc_uren_touched",
+                help="Automatisch berekend uit de afmetingen. Je kunt er je eigen "
+                     "inschatting in zetten; zodra je de afmetingen wijzigt rekent hij "
+                     "weer automatisch mee.")
 
         with col_m:
             st.markdown('<div style="font-size:11px;font-weight:600;color:#94A3B8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Afmetingen</div>', unsafe_allow_html=True)
