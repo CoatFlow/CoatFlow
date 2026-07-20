@@ -4339,6 +4339,43 @@ div[data-testid="stTextInput"] input[placeholder*="Zoek"] {
 }
 .calc-bd-bar { height: 5px; background: #2563EB; border-radius: 99px; }
 
+/* Verborgen navigatieknoppen achter de klikbare projectrijen op het dashboard.
+   Meteen via CSS wegzetten (niet pas via JS), anders flitst '→openprojN' kort in beeld. */
+[class*="st-key-db_open_proj_"]{
+    position:fixed !important;left:-9999px !important;top:-9999px !important;
+    width:1px !important;height:1px !important;overflow:hidden !important;
+    opacity:0 !important;pointer-events:none !important;}
+
+/* ===================== SLIDER (globaal) ===================== */
+/* De slider-styling stond alleen in het CSS-blok van Calculaties, waardoor de
+   Winstmarge-slider bij 'Nieuw project' en in Instellingen er anders uitzag.
+   Globaal = overal dezelfde blauwe bol, lijn en waarde. */
+[data-testid="stSlider"] [role="slider"]{
+    background:#2563EB !important;background-color:#2563EB !important;
+    border-color:#2563EB !important;box-shadow:0 0 0 4px rgba(37,99,235,0.15) !important;}
+[data-testid="stSliderThumbValue"],[data-testid="stThumbValue"]{
+    color:#2563EB !important;background:transparent !important;border:none !important;box-shadow:none !important;}
+/* De trackbalk zelf moet ZICHTBAAR blijven: een eerdere 'maak alles transparant'-regel
+   (om een grijs blok weg te halen) maakte ook de lijn onzichtbaar, waardoor alleen een
+   los blauw bolletje overbleef. Grijze rail + blauwe gevulde helft, expliciet gezet. */
+[data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] ~ div,
+[data-testid="stSlider"] [role="progressbar"]{background:#2563EB !important;}
+/* Bol verticaal centreren op de 4px-rail. Nodig omdat BaseWeb de bol binnen een
+   st.form niet positioneert (zie de JS-fix 'slider-fix' verderop): zonder dit staat
+   de bovenkant van het bolletje gelijk met de rail en oogt hij afgesneden. */
+[data-testid="stSlider"] [data-baseweb="slider"]{margin-top:2px !important;}
+
+/* ===================== POPOVER-MENU (globaal) ===================== */
+/* Zowel de ⋮-menu's in tabellen als het uitlogmenu in de sidebar gebruiken
+   stPopoverBody. Deze regels stonden eerder in het CSS-blok van de Projecten-
+   pagina, waardoor het uitlogmenu per pagina anders oogde (grootte/kleur).
+   Globaal = overal identiek. */
+[data-testid="stPopoverBody"]{min-width:130px !important;max-width:160px !important;padding:6px !important;}
+[data-testid="stPopoverBody"] [data-testid="stButton"] > button{background:transparent !important;border:none !important;box-shadow:none !important;color:#374151 !important;font-size:12px !important;font-weight:500 !important;padding:5px 8px !important;text-align:left !important;border-radius:6px !important;height:auto !important;min-height:0 !important;line-height:1.4 !important;justify-content:flex-start !important;width:100% !important;}
+[data-testid="stPopoverBody"] [data-testid="stButton"] > button:hover{background:#F1F5F9 !important;color:#0F172A !important;}
+[data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"]:has(span.pj-del-mk) ~ [data-testid="stButton"] > button{color:#DC2626 !important;}
+[data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"]:has(span.pj-del-mk) ~ [data-testid="stButton"] > button:hover{background:#FFF5F5 !important;color:#B91C1C !important;}
+
 /* ===================== SIDEBAR ⋮-UITLOGMENU ===================== */
 /* Positionering + styling van het ⋮-profielmenu. Globaal en synchroon (i.p.v. late
    iframe-CSS) én op de popover-WRAPPER zelf via :has() — niet via marker-adjacency
@@ -4466,6 +4503,61 @@ if not st.session_state.get("_css_base_done"):
     height=0, scrolling=False
     )
     st.session_state["_css_base_done"] = True
+
+
+# ── Slider-fix: bol positioneren binnen een st.form ──────────────────────────
+# Streamlit/BaseWeb berekent de positie van de sliderbol uit de trackbreedte. Binnen
+# een st.form gebeurt dat niet: de bol houdt `transform: translate(0px, 0px)`, blijft
+# dus links staan (óók bij waarde 25) en wordt niet verticaal gecentreerd — de
+# bovenkant van het bolletje ligt dan gelijk met de rail en oogt afgesneden.
+# Gemeten: Winstmarge (Nieuw project) en Standaard winstmarge (Instellingen) staan
+# allebei op translate(0,0); dezelfde slider op Calculaties (buiten een form) staat
+# correct op translate(94px, -4px). Een resize-event of DOM-nudge herstelt het niet.
+# Deze shim rekent de positie zelf uit, maar ALLEEN in die kapotte toestand — zodra
+# BaseWeb zelf een transform zet (bv. bij slepen) blijft de shim eraf.
+if not st.session_state.get("_slider_fix_done"):
+    # In het HOOFDDOCUMENT hangen (net als de basis-CSS), niet in het component-iframe:
+    # dat iframe wordt bij een volgende rerun opgeruimd en neemt zijn MutationObserver
+    # mee, waardoor de fix stilletjes stopte. Een <script> in de parent-head overleeft.
+    _components.html("""<script>(function(){
+var p=window.parent.document;
+if(p.getElementById('cf-slider-fix')) return;
+var s=p.createElement('script'); s.id='cf-slider-fix';
+s.textContent = "(" + function(){
+var p=document;
+function fix(){
+  p.querySelectorAll('[data-testid="stSlider"] [role="slider"]').forEach(function(th){
+    var st=th.getAttribute('style')||'';
+    if(st.indexOf('translate(0px, 0px)')<0) return;      // BaseWeb doet het zelf al
+    var rail=th.parentElement; if(!rail) return;
+    var min=parseFloat(th.getAttribute('aria-valuemin')),
+        max=parseFloat(th.getAttribute('aria-valuemax')),
+        val=parseFloat(th.getAttribute('aria-valuenow'));
+    if(!isFinite(min)||!isFinite(max)||!isFinite(val)||max<=min) return;
+    var breedte=rail.clientWidth-th.offsetWidth;
+    if(breedte<=0) return;                                 // nog niet gelayout
+    var x=((val-min)/(max-min))*breedte;
+    var y=(rail.clientHeight-th.offsetHeight)/2;           // 4px rail, 12px bol -> -4
+    th.style.transform='translate('+x+'px, '+y+'px)';
+  });
+}
+fix();
+/* Ook op attributen letten: een tabwissel verandert alleen 'display'/'hidden' —
+   dat is geen DOM-toevoeging, dus met alleen childList vuurde de observer niet en
+   bleef de bol op de verkeerde plek staan zodra je van tab wisselde. */
+var obs=new MutationObserver(function(){clearTimeout(window._cfSliderT);
+  window._cfSliderT=setTimeout(fix,40);});
+obs.observe(p.body,{childList:true,subtree:true,attributes:true,
+  attributeFilter:['style','class','hidden','aria-valuenow']});
+window.addEventListener('resize',function(){clearTimeout(window._cfSliderR);
+  window._cfSliderR=setTimeout(fix,40);});
+/* Vangnet voor de eerste seconden: React kan de stijl na het monteren nog
+   overschrijven, en een verborgen tab heeft dan nog geen breedte. */
+[120,350,800,1500,2500].forEach(function(ms){setTimeout(fix,ms);});
+}.toString() + ")();";
+p.head.appendChild(s);
+})();</script>""", height=0, scrolling=False)
+    st.session_state["_slider_fix_done"] = True
 
 
 def _inject_page_css(css):
@@ -5563,7 +5655,8 @@ if selected == "Dashboard":
                 color_s, bg_s = STATUS_KLEUREN.get(project["status"], ("#475569","#F1F5F9"))
                 adres = project.get("adres","")
                 _proj_rows_html += (
-                    f'<div class="db-proj-row">'
+                    f'<div class="db-proj-row db-proj-klik" data-pid="{project["id"]}" '
+                    f'style="cursor:pointer;">'
                     f'<div class="db-proj-thumb"><i class="bi bi-{bi_icon}" style="font-size:17px;color:#2563EB;"></i></div>'
                     f'<div class="db-proj-info">'
                     f'<div class="db-proj-name">{h(project["naam"])}</div>'
@@ -5772,6 +5865,17 @@ if selected == "Dashboard":
             st.session_state["nav_doel"] = "Projecten"
             st.rerun()
 
+        # Per recent project een verborgen knop: klik op de rij → dat project geopend
+        # op de Projecten-pagina. Zelfde koppelpatroon als 'Bekijk alles' (JS zoekt de
+        # knop op zijn tekst en verbergt 'm); de rij-div draagt data-pid.
+        for _p in reversed(_recent_bron[-5:]):
+            if st.button(f"→openproj{_p['id']}", key=f"db_open_proj_{_p['id']}"):
+                st.session_state.geselecteerd_project = _p["id"]
+                st.session_state.pj_edit_in_form = None      # view-modus, niet bewerken
+                _wis_pdf_downloadknoppen(_p["id"])           # detailkaarten ingeklapt starten
+                st.session_state["nav_doel"] = "Projecten"
+                st.rerun()
+
         # JS: verberg Streamlit-knop en koppel HTML-span-klik eraan
         _html_component("""<script>(function(){
 var SPAN_ID='db-proj-bekijk-link';
@@ -5789,6 +5893,21 @@ function wire(){
         if(wrap) wrap.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;';
     }
     if(span&&btn) span.onclick=function(){btn.click();};
+
+    /* Projectrijen klikbaar: verberg elke '→openprojN'-knop en koppel 'm aan de rij
+       met data-pid=N. Eén klik op de rij opent dat project op de Projecten-pagina. */
+    var perId={};
+    for(var j=0;j<all.length;j++){
+        var mm=all[j].textContent.trim().match(/^→openproj([0-9]+)$/);
+        if(!mm) continue;
+        perId[mm[1]]=all[j];
+        var w2=all[j].closest('[data-testid="stButton"]');
+        if(w2) w2.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;';
+    }
+    p.querySelectorAll('.db-proj-klik').forEach(function(rij){
+        var b=perId[rij.getAttribute('data-pid')];
+        if(b) rij.onclick=function(){b.click();};
+    });
 }
 wire();
 var obs=new MutationObserver(function(){
@@ -5982,11 +6101,9 @@ elif selected == "Projecten":
     [data-testid="stPopoverButton"] > div > div:last-child{display:none !important;}
     [data-testid="stPopoverButton"] p{font-size:20px !important;line-height:1.2 !important;margin:0 !important;text-align:center !important;}
     /* ── Popover actiemenu: compact ── */
-    [data-testid="stPopoverBody"]{min-width:130px !important;max-width:160px !important;padding:6px !important;}
-    [data-testid="stPopoverBody"] [data-testid="stButton"] > button{background:transparent !important;border:none !important;box-shadow:none !important;color:#374151 !important;font-size:12px !important;font-weight:500 !important;padding:5px 8px !important;text-align:left !important;border-radius:6px !important;height:auto !important;min-height:0 !important;line-height:1.4 !important;justify-content:flex-start !important;width:100% !important;}
-    [data-testid="stPopoverBody"] [data-testid="stButton"] > button:hover{background:#F1F5F9 !important;color:#0F172A !important;}
-    [data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"]:has(span.pj-del-mk) ~ [data-testid="stButton"] > button{color:#DC2626 !important;}
-    [data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"]:has(span.pj-del-mk) ~ [data-testid="stButton"] > button:hover{background:#FFF5F5 !important;color:#B91C1C !important;}
+    /* (Popover-menu-styling staat nu GLOBAAL in _APP_CSS: het ⋮-uitlogmenu in de
+       sidebar gebruikt dezelfde stPopoverBody en veranderde van grootte/kleur
+       zodra je van pagina wisselde, omdat deze regels paginagebonden waren.) */
     /* ── Tekststijlen ── */
     .pj-name{font-size:14px;font-weight:700;color:#0F172A;letter-spacing:-0.2px;line-height:1.3;margin-bottom:3px;}
     .pj-client{font-size:12px;font-weight:500;color:#475569;margin-bottom:1px;}
