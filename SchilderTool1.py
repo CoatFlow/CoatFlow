@@ -8982,9 +8982,15 @@ elif selected == "Producten":
                                 f"velden hieronder en pas aan waar nodig.")
                 st.rerun()
 
+        # Vaste plek voor de melding (st.empty = altijd één element, ook als er niets
+        # in staat). Voorheen werd de melding alleen bij een flash gerenderd; dan schoof
+        # ALLES eronder één positie op en toonde Streamlit tijdens die rerun kort zowel
+        # de oude als de nieuwe kaart — de 'dubbele card' die ~1 seconde in beeld flitste.
+        _flash_slot = st.empty()
         _flash = st.session_state.pop("pn_import_flash", None)
         if _flash:
-            ui_alert(_flash[1], _flash[0])
+            with _flash_slot.container():
+                ui_alert(_flash[1], _flash[0])
 
         _inject_keyed_css("prod_nieuw", """
         /* ── Witte hoofdcard ── */

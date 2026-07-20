@@ -657,7 +657,11 @@ def _render_login():
                         st.error("Vul je e-mailadres en wachtwoord in.")
                     else:
                         try:
-                            sign_in(email.strip(), pw)
+                            # Zichtbare terugkoppeling: inloggen doet een auth-call plus
+                            # het laden van alle bedrijfsdata. Zonder spinner staat de knop
+                            # seconden 'dood' en klikken mensen nog een keer.
+                            with st.spinner("Bezig met inloggen…"):
+                                sign_in(email.strip(), pw)
                             st.rerun()
                         except AuthError as e:
                             st.error(str(e))

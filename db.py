@@ -513,15 +513,45 @@ def load_company_data(company_id) -> dict:
         raise DbError(f"Laden uit de database mislukte: {e}")
 
 
+def _parallel_fetch(taken_map):
+    """Voer onafhankelijke queries GELIJKTIJDIG uit i.p.v. achter elkaar.
+
+    PERF: bij inloggen haalde de app 8 losse tabellen sequentieel op; met de latency
+    naar Supabase erbij is dat 8 wachttijden op een rij vóór het dashboard rendert.
+    Ze hangen niet van elkaar af, dus parallel scheelt ~7 round-trips.
+
+    Bij ELKE fout valt hij terug op precies de oude, sequentiële volgorde. De fout
+    ontstaat dan opnieuw op het sequentiële pad en bubbelt normaal omhoog, zodat de
+    auth-detectie en de service_role-terugval in _run_with_client ongewijzigd werken.
+    Slechtste geval = het gedrag van vóór deze wijziging."""
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(taken_map)) as ex:
+            futures = {sleutel: ex.submit(fn) for sleutel, fn in taken_map.items()}
+            return {sleutel: fut.result() for sleutel, fut in futures.items()}
+    except Exception:
+        return {sleutel: fn() for sleutel, fn in taken_map.items()}
+
+
 def _load_impl(cl, company_id) -> dict:
-    comp = cl.table("companies").select("*").eq("id", company_id).single().execute().data
-    klanten   = [_clean(r) for r in cl.table("klanten").select("*").eq("company_id", company_id).order("id").execute().data]
-    producten = [_clean(r) for r in cl.table("producten").select("*").eq("company_id", company_id).order("id").execute().data]
-    personeel = [_clean(r) for r in cl.table("personeel").select("*").eq("company_id", company_id).order("id").execute().data]
-    proj_rows = cl.table("projecten").select("*").eq("company_id", company_id).order("id").execute().data
-    taken     = [_clean(r) for r in cl.table("taken").select("*").eq("company_id", company_id).order("id").execute().data]
-    agenda_rows = cl.table("agenda_items").select("*").eq("company_id", company_id).execute().data
-    links     = cl.table("project_personeel").select("project_id, personeel_id").eq("company_id", company_id).execute().data
+    _rijen = _parallel_fetch({
+        "comp":      lambda: cl.table("companies").select("*").eq("id", company_id).single().execute().data,
+        "klanten":   lambda: cl.table("klanten").select("*").eq("company_id", company_id).order("id").execute().data,
+        "producten": lambda: cl.table("producten").select("*").eq("company_id", company_id).order("id").execute().data,
+        "personeel": lambda: cl.table("personeel").select("*").eq("company_id", company_id).order("id").execute().data,
+        "projecten": lambda: cl.table("projecten").select("*").eq("company_id", company_id).order("id").execute().data,
+        "taken":     lambda: cl.table("taken").select("*").eq("company_id", company_id).order("id").execute().data,
+        "agenda":    lambda: cl.table("agenda_items").select("*").eq("company_id", company_id).execute().data,
+        "links":     lambda: cl.table("project_personeel").select("project_id, personeel_id").eq("company_id", company_id).execute().data,
+    })
+    comp        = _rijen["comp"]
+    klanten     = [_clean(r) for r in _rijen["klanten"]]
+    producten   = [_clean(r) for r in _rijen["producten"]]
+    personeel   = [_clean(r) for r in _rijen["personeel"]]
+    proj_rows   = _rijen["projecten"]
+    taken       = [_clean(r) for r in _rijen["taken"]]
+    agenda_rows = _rijen["agenda"]
+    links       = _rijen["links"]
 
     # M:N personeel↔projecten rehydrateren (beide richtingen die de app gebruikt)
     mw_by_proj, proj_by_mw = defaultdict(list), defaultdict(list)
