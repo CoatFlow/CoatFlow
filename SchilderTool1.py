@@ -98,6 +98,15 @@ def _use_db():
     except Exception:
         return False
 
+def _materieel_kolom_ontbreekt():
+    """True als de database de kolom 'materieel' nog niet kent (migratie
+    supabase_materieel.sql nog niet gedraaid). db.py laat die kolom dan bij het
+    opslaan weg en onthoudt dat, zodat we hier een duidelijke melding kunnen tonen."""
+    try:
+        return _use_db() and "materieel" in _db.ontbrekende_kolommen().get("projecten", [])
+    except Exception:
+        return False
+
 def _load_data_json():
     """Terugval: laad persistente data uit het lokale JSON-bestand."""
     if not DATA_PATH.exists():
@@ -4462,9 +4471,7 @@ div[data-testid="stTextInput"] input[placeholder*="Zoek"] {
 
 /* Verborgen navigatieknoppen achter de klikbare projectrijen op het dashboard.
    Meteen via CSS wegzetten (niet pas via JS), anders flitst '→openprojN' kort in beeld. */
-[class*="st-key-db_open_proj_"],
-/* idem voor de prullenbakken in de Materieel & Overig-subtabel ('→matdelN') */
-[class*="st-key-mat_del_"]{
+[class*="st-key-db_open_proj_"]{
     position:fixed !important;left:-9999px !important;top:-9999px !important;
     width:1px !important;height:1px !important;overflow:hidden !important;
     opacity:0 !important;pointer-events:none !important;}
@@ -6364,15 +6371,13 @@ elif selected == "Projecten":
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{background:#F8FAFC !important;border-color:#CBD5E1 !important;}
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stMarkdownContainer"]{background:transparent !important;border:none !important;}
     /* ── Onderdeel verwijderen via long-press ── */
-    .pd-table tbody tr.pd-ond-row{cursor:pointer;user-select:none;-webkit-user-select:none;}
-    /* ── Materieel & Overig-subtabel: iets compacter dan de onderdelen-tabel, met een
-       prullenbak achter elke regel. Rood pas bij hover, zodat de tabel rustig blijft. */
+    /* Onderdelen- én materieel-rijen: ingedrukt-houden om te verwijderen (zelfde UX). */
+    .pd-table tbody tr.pd-ond-row,
+    .pd-table tbody tr.pd-mat-row{cursor:pointer;user-select:none;-webkit-user-select:none;}
     /* Materieel & Overig: tweede tabel BINNEN dezelfde onderdelen-kaart. Een subkop
        met een dunne scheidingslijn erboven zet 'm visueel los van de onderdelen. */
     .pd-mat-subhead{margin-top:22px !important;padding-top:18px !important;border-top:1px solid #F1F5F9;}
     .pd-mat-table td{padding:9px 14px;}
-    .pd-mat-del{cursor:pointer;color:#CBD5E1;font-size:14px;padding:4px 6px;border-radius:7px;display:inline-flex;transition:color .12s,background .12s;}
-    .pd-mat-del:hover{color:#DC2626;background:#FEF2F2;}
     @keyframes pdHoldFill{from{background-size:0% 100%;}to{background-size:100% 100%;}}
     .pd-table tbody tr.pd-ond-pressing td{
         background-image:linear-gradient(90deg,#FECACA,#FCA5A5) !important;
@@ -6803,15 +6808,14 @@ if(!p._pjPopWatching){
                     if _mat_rows:
                         _mat_tbody = ""
                         for _mi, _mr in enumerate(_mat_rows):
+                            # Rij ingedrukt-houden om te verwijderen (zoals de onderdelen);
+                            # géén losse prullenbak-kolom meer.
                             _mat_tbody += (
-                                f'<tr>'
+                                f'<tr class="pd-mat-row" data-mi="{_mi}">'
                                 f'<td class="nm">{h(_mr["omschrijving"])}</td>'
                                 f'<td class="r" style="white-space:nowrap;">{format_eur(_mr["bedrag"])}</td>'
                                 f'<td class="r" style="color:#475569;">{_mr["marge"]:g}%</td>'
                                 f'<td class="r" style="font-weight:700;white-space:nowrap;">{format_eur(_mr["totaal"])}</td>'
-                                f'<td class="r" style="width:44px;">'
-                                f'<span class="pd-mat-del" data-mi="{_mi}" title="Regel verwijderen">'
-                                f'<i class="bi bi-trash"></i></span></td>'
                                 f'</tr>')
                         _mat_section = (
                             f'<div class="pd-sec-head pd-mat-subhead">'
@@ -6823,7 +6827,7 @@ if(!p._pjPopWatching){
                             f'<div class="pd-table-wrap">'
                             f'<table class="pd-table pd-mat-table"><thead><tr>'
                             f'<th>Omschrijving</th><th class="r">Bedrag</th>'
-                            f'<th class="r">Marge %</th><th class="r">Totaal</th><th></th>'
+                            f'<th class="r">Marge %</th><th class="r">Totaal</th>'
                             f'</tr></thead><tbody>{_mat_tbody}</tbody></table>'
                             f'</div>')
 
@@ -6961,49 +6965,114 @@ p.addEventListener('scroll',cancel,true);
 p._ondLp={down:down,cancel:cancel,move:move,st:st};
 })();</script>""", height=0, scrolling=False)
 
-                    # ── Materieel & Overig: verwijder-bedrading ──
-                    # De tabel zelf staat nu BINNEN de onderdelen-kaart hierboven
-                    # (één kaart met beide tabellen). Hier alleen de verborgen knoppen
-                    # + JS die het prullenbak-icoon in die tabel aan een echte st.button
-                    # koppelen. _mat_rows is al bij de kaart hierboven berekend.
+                    # ── Materieel & Overig: verwijderen via ingedrukt houden ──
+                    # Zelfde systeem als de onderdelen-tabel: een regel ingedrukt houden
+                    # opent een bevestiging; de echte verwijdering is een expliciete knop,
+                    # zodat er nooit per ongeluk data verdwijnt. Géén losse prullenbak meer.
                     if _mat_rows:
-                        # Verborgen knoppen — één per regel; de JS hieronder koppelt het
-                        # prullenbak-icoon eraan. Zelfde aanpak als de klikbare projectrijen
-                        # op het dashboard: de HTML-tabel blijft puur presentatie.
-                        for _mi in range(len(_mat_rows)):
-                            if st.button(f"→matdel{_mi}", key=f"mat_del_{_pid}_{_mi}"):
-                                _pr = st.session_state.projecten[project_idx]
-                                _lijst = _pr.get("materieel") or []
-                                if 0 <= _mi < len(_lijst):
-                                    _weg = _lijst.pop(_mi)
-                                    verzeker_prijs_snapshot(_pr)
-                                    save_data()
-                                    ui_alert(f"'{_weg.get('omschrijving', 'Regel')}' verwijderd.")
-                                st.rerun()
+                        _mat_pending = st.session_state.get("mat_del_pending")
+                        if (isinstance(_mat_pending, dict)
+                                and _mat_pending.get("pid") == project["id"]
+                                and 0 <= _mat_pending.get("idx", -1) < len(_mat_rows)):
+                            _mdi   = _mat_pending["idx"]
+                            _mnaam = _mat_rows[_mdi]["omschrijving"]
+                            st.markdown(
+                                f'<div class="pd-ond-confirm"><div class="pd-ond-confirm-txt">'
+                                f'<i class="bi bi-exclamation-triangle-fill" style="color:#DC2626;margin-right:8px;"></i>'
+                                f'Regel <strong>&nbsp;{h(_mnaam)}&nbsp;</strong> definitief verwijderen?'
+                                f'</div></div>',
+                                unsafe_allow_html=True)
+                            _mcf1, _mcf2, _mcf3 = st.columns([2.2, 2.2, 4])
+                            with _mcf1:
+                                st.markdown('<span class="pd-ond-confirm-del-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                                if st.button("Verwijderen", key=f"mat_del_yes_{project['id']}", use_container_width=True):
+                                    _pr = st.session_state.projecten[project_idx]
+                                    _lijst = _pr.get("materieel") or []
+                                    if 0 <= _mdi < len(_lijst):
+                                        _lijst.pop(_mdi)
+                                        verzeker_prijs_snapshot(_pr)   # SP-008: snapshot verversen
+                                        save_data()
+                                    st.session_state.mat_del_pending = None
+                                    ui_alert("Regel verwijderd.")
+                                    st.rerun()
+                            with _mcf2:
+                                st.markdown('<span class="pd-ond-confirm-no-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                                if st.button("Annuleren", key=f"mat_del_no_{project['id']}", use_container_width=True):
+                                    st.session_state.mat_del_pending = None
+                                    st.rerun()
 
+                        st.markdown(
+                            '<div class="pd-ond-hint"><i class="bi bi-hand-index" style="margin-right:6px;"></i>'
+                            'Houd een materieel-regel ingedrukt om te verwijderen</div>',
+                            unsafe_allow_html=True)
+                        # Verborgen trigger-knoppen — één per regel; de long-press JS klikt
+                        # de juiste, die de bevestiging opent. Zelfde verborgen-container-CSS
+                        # (pd-lptrig-mk) als bij de onderdelen.
+                        _mlp_box = st.container()
+                        with _mlp_box:
+                            st.markdown('<span class="pd-lptrig-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                            for _mi in range(len(_mat_rows)):
+                                if st.button(f"__matlp__{_mi}", key=f"mat_lp_{project['id']}_{_mi}"):
+                                    st.session_state.mat_del_pending = {"pid": project["id"], "idx": _mi}
+                                    st.rerun()
+                        # Long-press via event-delegatie op tr.pd-mat-row — eigen _matLp-context,
+                        # volledig los van de onderdelen-long-press (_ondLp). Beide handlers
+                        # leven naast elkaar: elk reageert alleen op zijn eigen rij-klasse.
                         _html_component("""<script>(function(){
-function wire(){
-    var p=window.parent.document;
-    var perIdx={};
-    var all=p.querySelectorAll('button');
-    for(var j=0;j<all.length;j++){
-        var mm=all[j].textContent.trim().match(/^→matdel([0-9]+)$/);
-        if(!mm) continue;
-        perIdx[mm[1]]=all[j];
-        var w=all[j].closest('[data-testid="stButton"]');
-        if(w) w.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;';
+var p=window.parent.document;
+var THRESHOLD=620;
+function findTrigger(idx){
+    var btns=p.querySelectorAll('button');
+    for(var i=0;i<btns.length;i++){
+        if(btns[i].textContent.trim()==='__matlp__'+idx) return btns[i];
     }
-    p.querySelectorAll('.pd-mat-del').forEach(function(ic){
-        var b=perIdx[ic.getAttribute('data-mi')];
-        if(b) ic.onclick=function(ev){ev.stopPropagation();b.click();};
-    });
+    return null;
 }
-wire();
-var obs=new MutationObserver(function(){
-    clearTimeout(window._matDelT);
-    window._matDelT=setTimeout(wire,30);
-});
-obs.observe(window.parent.document.body,{childList:true,subtree:true});
+if(p._matLp){
+    var o=p._matLp;
+    p.removeEventListener('mousedown',o.down,true);
+    p.removeEventListener('touchstart',o.down,true);
+    p.removeEventListener('mouseup',o.cancel,true);
+    p.removeEventListener('mousemove',o.move,true);
+    p.removeEventListener('touchend',o.cancel,true);
+    p.removeEventListener('touchcancel',o.cancel,true);
+    p.removeEventListener('touchmove',o.cancel,true);
+    p.removeEventListener('scroll',o.cancel,true);
+    if(o.st){ if(o.st.timer) clearTimeout(o.st.timer); if(o.st.row) o.st.row.classList.remove('pd-ond-pressing'); }
+}
+var st={timer:null,row:null};
+function cancel(){
+    if(st.row) st.row.classList.remove('pd-ond-pressing');
+    if(st.timer){clearTimeout(st.timer);st.timer=null;}
+    st.row=null;
+}
+function down(ev){
+    var row=ev.target&&ev.target.closest?ev.target.closest('tr.pd-mat-row'):null;
+    if(!row) return;
+    if(ev.type==='mousedown'&&ev.button!==0) return;
+    cancel();
+    st.row=row; row.classList.add('pd-ond-pressing');
+    st.timer=setTimeout(function(){
+        row.classList.remove('pd-ond-pressing'); st.timer=null; st.row=null;
+        var b=findTrigger(row.getAttribute('data-mi'));
+        if(b) b.click();
+    },THRESHOLD);
+}
+function move(ev){
+    if(st.row){
+        var over=ev.target&&ev.target.closest?ev.target.closest('tr.pd-mat-row'):null;
+        if(over!==st.row) cancel();
+    }
+}
+p.addEventListener('mousedown',down,true);
+p.addEventListener('touchstart',down,{passive:true,capture:true});
+p.addEventListener('mouseup',cancel,true);
+p.addEventListener('mousemove',move,true);
+p.addEventListener('touchend',cancel,true);
+p.addEventListener('touchcancel',cancel,true);
+p.addEventListener('touchmove',cancel,true);
+p.addEventListener('scroll',cancel,true);
+p._matLp={down:down,cancel:cancel,move:move,st:st};
 })();</script>""", height=0, scrolling=False)
 
                     # ── Totaal card ──
@@ -7279,6 +7348,14 @@ obs.observe(window.parent.document.body,{childList:true,subtree:true});
                         '<div style="font-size:14px;font-weight:700;color:#0F172A;">Materieel &amp; Overig</div>'
                         '</div>',
                         unsafe_allow_html=True)
+                    # Duidelijke, blijvende melding zolang de database de kolom 'materieel'
+                    # nog niet kent: dan verschijnt een regel wél in de tabel maar wordt hij
+                    # NIET bewaard tot supabase_materieel.sql is gedraaid. db.py blijft de
+                    # rest van het project gewoon opslaan (geen crash meer).
+                    if _materieel_kolom_ontbreekt():
+                        ui_alert("Materieel wordt nog niet in de database bewaard. Draai "
+                                 "<strong>supabase_materieel.sql</strong> in de Supabase SQL Editor; "
+                                 "daarna blijft alles staan.", "warning")
                     st.markdown('<span class="pj-mat-new-mk" style="display:none;"></span>',
                                 unsafe_allow_html=True)
                     # Geen Streamlit icon= (Material Symbols): die rendert in deze app
@@ -7375,6 +7452,7 @@ obs.observe(window.parent.document.body,{childList:true,subtree:true});
                 if st.button("← Terug naar overzicht", key="pj_terug"):
                     st.session_state.geselecteerd_project = None
                     st.session_state.ond_del_pending = None   # openstaande bevestiging wissen
+                    st.session_state.mat_del_pending = None   # idem voor materieel
                     _wis_pdf_downloadknoppen()                # Offerte/Factuur-knoppen inklappen
                     st.rerun()
 

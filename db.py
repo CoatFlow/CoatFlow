@@ -30,6 +30,7 @@ if _sys.platform == "win32":
 
 import hashlib
 import json
+import re
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
@@ -661,6 +662,47 @@ def _mark_saved(company_id, grp, content):
     _last_hashes[(company_id, grp)] = _hash_stable(content)
 
 
+_COL_ONTBREEKT = re.compile(r"could not find the '([^']+)' column", re.I)
+_ontbrekende_kolommen: dict = {}   # tabel -> set(kolommen die de DB (nog) niet kent)
+
+
+def ontbrekende_kolommen():
+    """Kolommen die bij het opslaan zijn weggelaten omdat de database ze (nog) niet
+    kent — bijv. {'projecten': ['materieel']} zolang supabase_materieel.sql niet is
+    gedraaid. De app leest dit uit om een duidelijke 'draai de migratie'-melding te
+    tonen i.p.v. de opslag helemaal te laten mislukken."""
+    return {t: sorted(c) for t, c in _ontbrekende_kolommen.items() if c}
+
+
+def _upsert_veerkrachtig(cl, table, company_id, rows):
+    """Upsert die een ontbrekende (optionele) kolom overleeft. Mist de database een
+    kolom (PostgREST PGRST204), dan laten we die kolom uit ALLE rijen weg en proberen
+    opnieuw — zodat de rest van de rij wél wordt bewaard en de app blijft werken vóór
+    een migratie is gedraaid. Bij een schone eerste keer (kolom bestaat weer, na de
+    migratie) wordt de onthouden-status gewist, zodat de waarschuwing vanzelf verdwijnt."""
+    payload = [dict(r, company_id=company_id) for r in rows]
+    weggelaten: set = set()
+    for _ in range(9):   # ruim genoeg; vangnet tegen een onverwachte lus
+        try:
+            cl.table(table).upsert(payload, on_conflict="company_id,id").execute()
+            if weggelaten:
+                _ontbrekende_kolommen[table] = weggelaten
+            else:
+                _ontbrekende_kolommen.pop(table, None)
+            return
+        except Exception as e:
+            m = _COL_ONTBREEKT.search(str(e))
+            if not m:
+                raise
+            kol = m.group(1)
+            if not any(kol in r for r in payload):
+                raise   # kolom zit niet in de payload → andere oorzaak, niet maskeren
+            for r in payload:
+                r.pop(kol, None)
+            weggelaten.add(kol)
+    raise DbError(f"Kon {table} niet opslaan: te veel ontbrekende kolommen {weggelaten}.")
+
+
 def _sync_table(cl, table, company_id, rows):
     """Schrijf de tabel weg met zo min mogelijk round-trips:
       • upsert ALLEEN gewijzigde/nieuwe rijen (t.o.v. wat we het laatst wegschreven);
@@ -683,9 +725,7 @@ def _sync_table(cl, table, company_id, rows):
             changed.append(r)
 
     if changed:
-        cl.table(table).upsert(
-            [dict(r, company_id=company_id) for r in changed],
-            on_conflict="company_id,id").execute()
+        _upsert_veerkrachtig(cl, table, company_id, changed)
 
     if prev is None:
         # Vorige staat onbekend → veilige volledige opschoning (oud gedrag).
