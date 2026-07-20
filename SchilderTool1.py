@@ -4350,20 +4350,33 @@ div[data-testid="stTextInput"] input[placeholder*="Zoek"] {
 /* De slider-styling stond alleen in het CSS-blok van Calculaties, waardoor de
    Winstmarge-slider bij 'Nieuw project' en in Instellingen er anders uitzag.
    Globaal = overal dezelfde blauwe bol, lijn en waarde. */
-[data-testid="stSlider"] [role="slider"]{
+/* Bol: zelfde maat en ring in rust, hover, focus én ingedrukt — BaseWeb wisselt daar
+   van stijlklasse, wat de bol van uiterlijk deed veranderen tijdens het slepen. */
+[data-testid="stSlider"] [role="slider"],
+[data-testid="stSlider"] [role="slider"]:hover,
+[data-testid="stSlider"] [role="slider"]:focus,
+[data-testid="stSlider"] [role="slider"]:focus-visible,
+[data-testid="stSlider"] [role="slider"]:active{
     background:#2563EB !important;background-color:#2563EB !important;
-    border-color:#2563EB !important;box-shadow:0 0 0 4px rgba(37,99,235,0.15) !important;}
+    border-color:#2563EB !important;outline:none !important;
+    box-shadow:0 0 0 4px rgba(37,99,235,0.15) !important;
+    overflow:visible !important;}
 [data-testid="stSliderThumbValue"],[data-testid="stThumbValue"]{
-    color:#2563EB !important;background:transparent !important;border:none !important;box-shadow:none !important;}
+    color:#2563EB !important;background:transparent !important;border:none !important;box-shadow:none !important;
+    /* Het getal is een KIND van de bol en wordt dus altijd óver de bol heen getekend.
+       BaseWeb zet het met een vaste `top` net boven de bol (ze raken elkaar precies);
+       in de ingedrukte toestand schuift dat op en dekte het de bovenste ~1/3 van de bol
+       af. Onderkant verankeren op 6px bóven de bol, dan kan het nooit meer overlappen. */
+    top:auto !important;bottom:calc(100% + 6px) !important;
+    pointer-events:none !important;white-space:nowrap !important;}
 /* De trackbalk zelf moet ZICHTBAAR blijven: een eerdere 'maak alles transparant'-regel
    (om een grijs blok weg te halen) maakte ook de lijn onzichtbaar, waardoor alleen een
    los blauw bolletje overbleef. Grijze rail + blauwe gevulde helft, expliciet gezet. */
 [data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] ~ div,
 [data-testid="stSlider"] [role="progressbar"]{background:#2563EB !important;}
-/* Bol verticaal centreren op de 4px-rail. Nodig omdat BaseWeb de bol binnen een
-   st.form niet positioneert (zie de JS-fix 'slider-fix' verderop): zonder dit staat
-   de bovenkant van het bolletje gelijk met de rail en oogt hij afgesneden. */
-[data-testid="stSlider"] [data-baseweb="slider"]{margin-top:2px !important;}
+/* De verticale centrering van de bol doet de JS-fix 'cf-slider-fix' (die rekent de
+   positie uit als BaseWeb dat binnen een st.form nalaat) — hier geen marge meer
+   bovenop, die verschoof de hele slider onnodig. */
 
 /* ===================== POPOVER-MENU (globaal) ===================== */
 /* Zowel de ⋮-menu's in tabellen als het uitlogmenu in de sidebar gebruiken
