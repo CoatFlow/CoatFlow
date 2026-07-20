@@ -6333,6 +6333,10 @@ elif selected == "Projecten":
     /* FIX wit blok IN de 'Toon alle toeslagen' expander-knop: het label-container mag
        niet wit gemaakt worden door de regel hierboven — transparant houden. */
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stExpander"] [data-testid="stMarkdownContainer"]{background:transparent !important;}
+    /* FIX wit blok OVER de knop-tekst: de regel hierboven maakt ELKE stMarkdownContainer
+       wit, óók het label ín een knop → wit vlak over de tekst (vooral zichtbaar op de
+       blauwe primaire knop). Knop-labels weer transparant. */
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) button [data-testid="stMarkdownContainer"]{background:transparent !important;}
     /* stColumn krijgt GEEN witte achtergrond — transparant laten zodat de multiselect-dropdown
        niet wordt afgedekt door de achterliggende witte achtergrond van een zusterkolom (oc3) */
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stColumn"]{border:none !important;box-shadow:none !important;}
@@ -6347,11 +6351,14 @@ elif selected == "Projecten":
     [data-testid="stHorizontalBlock"]:has(span.pj-mat-mk) > [data-testid="stColumn"] [data-testid="stLayoutWrapper"]:has(span.pj-ond-mk){height:100% !important;}
     /* Wis-knopje naast 'Toevoegen aan project': compact en rood-op-hover, zoals de
        andere verwijderacties in de app. */
-    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{border:1.5px solid #E2E8F0 !important;border-radius:10px !important;color:#64748B !important;padding-left:0 !important;padding-right:0 !important;}
+    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{border:1.5px solid #E2E8F0 !important;border-radius:10px !important;color:#64748B !important;padding-left:0 !important;padding-right:0 !important;justify-content:center !important;}
     [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{border-color:#FCA5A5 !important;color:#DC2626 !important;background:#FEF2F2 !important;}
-    /* Prullenbak-glyph op de (labelloze) wis-knop via Bootstrap-icons, zoals de rest
-       van de app — Streamlit icon= (Material Symbols) gaf hier een leeg wit blok. */
-    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]::before{font-family:"bootstrap-icons" !important;content:"\\f5de";font-size:15px;font-style:normal;font-weight:400;line-height:1;}
+    /* Prullenbak-glyph = het knop-LABEL (U+F5DE) in het Bootstrap-icons-font. Als label
+       wordt het door Streamlit vanzelf gecentreerd — een leeg label + ::before liet het
+       icoon links hangen (de lege label-wrapper hield breedte). Material Symbols (icon=)
+       gaf eerder een leeg wit blok; dit font rendert de glyph wél. */
+    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"] [data-testid="stMarkdownContainer"],
+    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"] [data-testid="stMarkdownContainer"] p{font-family:"bootstrap-icons" !important;font-size:15px !important;line-height:1 !important;}
     /* Toevoegen-knop: outline stijl (marker + volgende container) */
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{background:white !important;color:#0F172A !important;border:1.5px solid #E2E8F0 !important;border-radius:10px !important;font-weight:600 !important;}
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{background:#F8FAFC !important;border-color:#CBD5E1 !important;}
@@ -6360,8 +6367,10 @@ elif selected == "Projecten":
     .pd-table tbody tr.pd-ond-row{cursor:pointer;user-select:none;-webkit-user-select:none;}
     /* ── Materieel & Overig-subtabel: iets compacter dan de onderdelen-tabel, met een
        prullenbak achter elke regel. Rood pas bij hover, zodat de tabel rustig blijft. */
-    .pd-mat-card{margin-top:-4px;}
-    .pd-mat-card .pd-table td{padding:9px 14px;}
+    /* Materieel & Overig: tweede tabel BINNEN dezelfde onderdelen-kaart. Een subkop
+       met een dunne scheidingslijn erboven zet 'm visueel los van de onderdelen. */
+    .pd-mat-subhead{margin-top:22px !important;padding-top:18px !important;border-top:1px solid #F1F5F9;}
+    .pd-mat-table td{padding:9px 14px;}
     .pd-mat-del{cursor:pointer;color:#CBD5E1;font-size:14px;padding:4px 6px;border-radius:7px;display:inline-flex;transition:color .12s,background .12s;}
     .pd-mat-del:hover{color:#DC2626;background:#FEF2F2;}
     @keyframes pdHoldFill{from{background-size:0% 100%;}to{background-size:100% 100%;}}
@@ -6784,6 +6793,40 @@ if(!p._pjPopWatching){
                         )
                     if not project["onderdelen"]:
                         _tabel_rows = '<tr><td colspan="8" style="text-align:center;color:#94A3B8;padding:28px;">Nog geen onderdelen toegevoegd</td></tr>'
+
+                    # ── Materieel & Overig: als TWEEDE tabel binnen DEZELFDE kaart ──
+                    # Snapshot-bewust (materieel_lijst), zodat een bevroren offerte hier
+                    # exact dezelfde bedragen toont als op de PDF. De verborgen knoppen +
+                    # JS die het prullenbak-icoon koppelen staan verderop (ongewijzigd).
+                    _mat_rows = materieel_lijst(project)
+                    _mat_section = ""
+                    if _mat_rows:
+                        _mat_tbody = ""
+                        for _mi, _mr in enumerate(_mat_rows):
+                            _mat_tbody += (
+                                f'<tr>'
+                                f'<td class="nm">{h(_mr["omschrijving"])}</td>'
+                                f'<td class="r" style="white-space:nowrap;">{format_eur(_mr["bedrag"])}</td>'
+                                f'<td class="r" style="color:#475569;">{_mr["marge"]:g}%</td>'
+                                f'<td class="r" style="font-weight:700;white-space:nowrap;">{format_eur(_mr["totaal"])}</td>'
+                                f'<td class="r" style="width:44px;">'
+                                f'<span class="pd-mat-del" data-mi="{_mi}" title="Regel verwijderen">'
+                                f'<i class="bi bi-trash"></i></span></td>'
+                                f'</tr>')
+                        _mat_section = (
+                            f'<div class="pd-sec-head pd-mat-subhead">'
+                            f'<div class="pd-sec-icon-box">'
+                            f'<i class="bi bi-tools" style="font-size:15px;color:#2563EB;"></i>'
+                            f'</div>'
+                            f'<span class="pd-sec-title">Materieel &amp; Overig</span>'
+                            f'</div>'
+                            f'<div class="pd-table-wrap">'
+                            f'<table class="pd-table pd-mat-table"><thead><tr>'
+                            f'<th>Omschrijving</th><th class="r">Bedrag</th>'
+                            f'<th class="r">Marge %</th><th class="r">Totaal</th><th></th>'
+                            f'</tr></thead><tbody>{_mat_tbody}</tbody></table>'
+                            f'</div>')
+
                     st.markdown(
                         f'<div class="pd-card">'
                         f'<div class="pd-sec-head">'
@@ -6799,6 +6842,7 @@ if(!p._pjPopWatching){
                         f'<th class="r">Toeslagen</th><th class="r">Totaal excl. BTW</th>'
                         f'</tr></thead><tbody>{_tabel_rows}</tbody></table>'
                         f'</div>'
+                        f'{_mat_section}'
                         f'</div>',
                         unsafe_allow_html=True)
 
@@ -6917,42 +6961,12 @@ p.addEventListener('scroll',cancel,true);
 p._ondLp={down:down,cancel:cancel,move:move,st:st};
 })();</script>""", height=0, scrolling=False)
 
-                    # ── Materieel & Overig: compacte subtabel ──
-                    # Verschijnt alleen als er regels zijn, direct onder de onderdelen-tabel
-                    # en boven de balk 'Totaal excl. BTW'. Geen m²/lagen-kolommen: een steiger
-                    # heeft die niet. Snapshot-bewust (materieel_lijst), zodat een bevroren
-                    # offerte hier exact dezelfde bedragen toont als op de PDF.
-                    _mat_rows = materieel_lijst(project)
+                    # ── Materieel & Overig: verwijder-bedrading ──
+                    # De tabel zelf staat nu BINNEN de onderdelen-kaart hierboven
+                    # (één kaart met beide tabellen). Hier alleen de verborgen knoppen
+                    # + JS die het prullenbak-icoon in die tabel aan een echte st.button
+                    # koppelen. _mat_rows is al bij de kaart hierboven berekend.
                     if _mat_rows:
-                        _mat_tbody = ""
-                        for _mi, _mr in enumerate(_mat_rows):
-                            _mat_tbody += (
-                                f'<tr>'
-                                f'<td class="nm">{h(_mr["omschrijving"])}</td>'
-                                f'<td class="r" style="white-space:nowrap;">{format_eur(_mr["bedrag"])}</td>'
-                                f'<td class="r" style="color:#475569;">{_mr["marge"]:g}%</td>'
-                                f'<td class="r" style="font-weight:700;white-space:nowrap;">{format_eur(_mr["totaal"])}</td>'
-                                f'<td class="r" style="width:44px;">'
-                                f'<span class="pd-mat-del" data-mi="{_mi}" title="Regel verwijderen">'
-                                f'<i class="bi bi-trash"></i></span></td>'
-                                f'</tr>')
-                        st.markdown(
-                            f'<div class="pd-card pd-mat-card">'
-                            f'<div class="pd-sec-head">'
-                            f'<div class="pd-sec-icon-box">'
-                            f'<i class="bi bi-tools" style="font-size:15px;color:#2563EB;"></i>'
-                            f'</div>'
-                            f'<span class="pd-sec-title">Materieel &amp; Overig</span>'
-                            f'</div>'
-                            f'<div class="pd-table-wrap">'
-                            f'<table class="pd-table"><thead><tr>'
-                            f'<th>Omschrijving</th><th class="r">Bedrag</th>'
-                            f'<th class="r">Marge %</th><th class="r">Totaal</th><th></th>'
-                            f'</tr></thead><tbody>{_mat_tbody}</tbody></table>'
-                            f'</div>'
-                            f'</div>',
-                            unsafe_allow_html=True)
-
                         # Verborgen knoppen — één per regel; de JS hieronder koppelt het
                         # prullenbak-icoon eraan. Zelfde aanpak als de klikbare projectrijen
                         # op het dashboard: de HTML-tabel blijft puur presentatie.
@@ -7334,9 +7348,11 @@ obs.observe(window.parent.document.body,{childList:true,subtree:true});
                         with _mb2:
                             st.markdown('<span class="pj-mat-del-mk" style="display:none;"></span>',
                                         unsafe_allow_html=True)
-                            # Prullenbak via de app-conventie (Bootstrap ::before op de
-                            # marker pj-mat-del-mk), niet via Streamlit icon=.
-                            if st.button("", key=f"mat_wis_{_pid}", use_container_width=True,
+                            # Prullenbak als LABEL (Bootstrap-glyph U+F5DE) i.p.v. ::before:
+                            # zo centreert Streamlit het icoon vanzelf. Een leeg label + ::before
+                            # liet het icoon links hangen (de lege label-wrapper hield breedte).
+                            # De CSS zet het font van dit label op 'bootstrap-icons'.
+                            if st.button("\uf5de", key=f"mat_wis_{_pid}", use_container_width=True,
                                          help="Regel wissen"):
                                 st.session_state[f"mat_open_{_pid}"] = False
                                 for _mk in (_mat_oms_k, _mat_bed_k, _mat_mrg_k):
