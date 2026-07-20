@@ -486,6 +486,10 @@ def _inject_login_css():
     .cf-hero-title .cf-ac { color:#4C8DFF; }
     .cf-hero-sub { font-size:15px; line-height:1.55; color:#A9BBD4; max-width:380px; margin:0; }
     .cf-hr { height:1px; background:rgba(255,255,255,.12); margin:26px 0; max-width:430px; }
+    /* tweede streep (onder de features): .cf-hero-mid heeft zelf al 26px ondermarge,
+       dus zonder eigen bovenmarge staat hij exact midden tussen de laatste feature
+       en 'Veilig & Betrouwbaar'. Gemeten: 89px boven / 89px onder. */
+    .cf-hr-onder { margin-top:0; }
     .cf-feat { display:flex; gap:15px; align-items:flex-start; margin:0 0 22px; max-width:420px; }
     .cf-feat:last-child { margin-bottom:0; }
     .cf-feat-ic { width:26px; height:26px; flex:none; margin-top:1px; background-repeat:no-repeat; background-position:center; background-size:24px; }
@@ -618,6 +622,12 @@ def _render_login():
         + _feat("calc", "Slim Calculeren", "Bereken materiaal, arbeid en kosten snel en nauwkeurig.")
         + _feat("chart", "Overzicht &amp; Inzicht", "Krijg inzicht in je omzet, projecten en prestaties.")
         + '</div>'
+        # Zelfde streep als tussen de subtekst en de eerste feature. Staat bewust
+        # BUITEN .cf-hero-mid: als los kind van de flex-kolom verdeelt
+        # justify-content:space-between de vrije ruimte gelijk boven en onder de
+        # streep, zodat hij op elke schermhoogte midden tussen 'Overzicht & Inzicht'
+        # en 'Veilig & Betrouwbaar' blijft staan.
+        '<div class="cf-hr cf-hr-onder"></div>'
         '<div class="cf-hero-sec"><div class="cf-feat-ic cf-ic-shield"></div>'
         '<div><div class="cf-feat-t">Veilig &amp; Betrouwbaar</div>'
         '<div class="cf-feat-d">Jouw gegevens zijn veilig bij ons.</div></div></div>'
