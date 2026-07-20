@@ -1110,6 +1110,37 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
         "incl_btw": round(round(excl_btw, 2) + round(btw_bedrag, 2), 2),
     }
 
+def materieel_regels(project):
+    """Materieel & Overig als berekende regels: [{omschrijving, bedrag, marge, totaal}].
+
+    Eén bron voor scherm, offerte-PDF, factuur-PDF en Word-sjabloon, zodat de
+    bedragen daar per definitie gelijk zijn. `bedrag` is excl. BTW; de marge komt
+    er bovenop (10% op € 100 → € 110). Ongeldige invoer telt als 0 i.p.v. te
+    crashen — de lijst komt uit jsonb en kan van alles bevatten."""
+    regels = []
+    for m in project.get("materieel") or []:
+        try:
+            bedrag = float(m.get("bedrag", 0) or 0)
+        except (TypeError, ValueError):
+            bedrag = 0.0
+        try:
+            marge = float(m.get("marge", 0) or 0)
+        except (TypeError, ValueError):
+            marge = 0.0
+        regels.append({
+            "omschrijving": str(m.get("omschrijving", "") or ""),
+            "bedrag": round(bedrag, 2),
+            "marge": marge,
+            "totaal": round(bedrag * (1 + marge / 100), 2),
+        })
+    return regels
+
+
+def materieel_totaal(project):
+    """Som van alle materieelregels inclusief marge (excl. BTW)."""
+    return round(sum(r["totaal"] for r in materieel_regels(project)), 2)
+
+
 def _bereken_project_totaal_live(project):
     """Bereken totaal voor een project — altijd live uit actuele prijzen/tarieven."""
     marge = project.get("marge", st.session_state.instellingen["standaard_marge"])
@@ -1131,10 +1162,21 @@ def _bereken_project_totaal_live(project):
         totaal_btw += c["btw_bedrag"]
         totaal_incl += c["incl_btw"]
 
+    # Materieel & Overig telt bij het subtotaal excl. BTW; de BTW gaat daarna over
+    # het NIEUWE totaal (dus ook over het materieel), conform de opdracht.
+    _mat = materieel_totaal(project)
+    totaal_excl += _mat
+    totaal_btw  += _mat * btw / 100
+    totaal_incl += _mat * (1 + btw / 100)
+
     return {
         "materiaal": round(totaal_materiaal, 2),
         "arbeid": round(totaal_arbeid, 2),
         "toeslagen": round(totaal_toeslagen, 2),
+        # Aparte post: de kosten-breakdown leidt 'Marge' af als restbedrag
+        # (excl_btw - materiaal - arbeid - toeslagen). Zonder deze sleutel zou het
+        # materieel daar stilzwijgend als marge worden geteld.
+        "materieel": _mat,
         "excl_btw": round(totaal_excl, 2),
         "btw_bedrag": round(totaal_btw, 2),
         "incl_btw": round(totaal_incl, 2),
@@ -1152,14 +1194,22 @@ def render_kosten_breakdown(result, marge_pct, btw_pct):
     projecttotalen (en bevroren snapshots) wordt het afgeleid uit excl_btw minus de
     directe kosten, zodat de getoonde bedragen exact bij de projectcalculatie aansluiten."""
     totaal_ref = result["incl_btw"] if result.get("incl_btw", 0) > 0 else 1
+    # Materieel & Overig staat los van materiaal/arbeid/toeslagen en heeft zijn eigen
+    # marge al ingerekend; het hoort dus NIET in de afgeleide marge terecht te komen.
+    materieel_bedrag = result.get("materieel", 0) or 0
     marge_bedrag = result.get("marge_bedrag")
     if marge_bedrag is None:
-        marge_bedrag = result["excl_btw"] - result["materiaal"] - result["arbeid"] - result["toeslagen"]
+        marge_bedrag = (result["excl_btw"] - result["materiaal"] - result["arbeid"]
+                        - result["toeslagen"] - materieel_bedrag)
 
     items = [
         ("droplet",      "#EFF6FF", "#2563EB", "Materiaal",             result["materiaal"]),
         ("person-badge", "#F0FDF4", "#059669", "Arbeid",                result["arbeid"]),
         ("plus-circle",  "#FFF7ED", "#D97706", "Toeslagen",             result["toeslagen"]),
+    ]
+    if materieel_bedrag:
+        items.append(("tools", "#F1F5F9", "#475569", "Materieel & Overig", materieel_bedrag))
+    items += [
         ("graph-up",     "#FFFBEB", "#D97706", f"Marge ({marge_pct}%)", marge_bedrag),
         ("bank",         "#F5F3FF", "#7C3AED", f"BTW ({btw_pct}%)",     result["btw_bedrag"]),
     ]
@@ -1207,6 +1257,7 @@ def _calc_inputs_hash(project):
     dan wijkt de hash af en is de snapshot niet langer leidend."""
     return hashlib.md5(json.dumps({
         "onderdelen": project.get("onderdelen", []),
+        "materieel":  project.get("materieel", []),
         "marge": project.get("marge", st.session_state.instellingen["standaard_marge"]),
         "btw":   project.get("btw",   st.session_state.instellingen["standaard_btw"]),
     }, sort_keys=True, default=str).encode()).hexdigest()
@@ -1227,7 +1278,12 @@ def _snapshot_actief(project):
     snap = project.get("prijs_snapshot")
     return (bool(snap)
             and project.get("status") in FROZEN_STATUSSEN
-            and len(snap.get("onderdelen", [])) == len(project.get("onderdelen", [])))
+            and len(snap.get("onderdelen", [])) == len(project.get("onderdelen", []))
+            # Materieel & Overig telt mee in het totaal, dus een regel erbij/eraf is
+            # net zo goed een inhoudswijziging als een onderdeel erbij/eraf. Zonder
+            # deze check blijft de bevroren prijs staan en beweegt het totaal niet mee.
+            # .get() met [] → bestaande snapshots van vóór deze functie blijven geldig.
+            and len(snap.get("materieel", [])) == len(project.get("materieel", []) or []))
 
 def maak_prijs_snapshot(project):
     """Leg de actuele (live) berekening vast op het project."""
@@ -1238,6 +1294,7 @@ def maak_prijs_snapshot(project):
         "inputs_hash": _calc_inputs_hash(project),
         "onderdelen":  [bereken_onderdeel(o, marge, btw, project_id=project.get("id"))
                         for o in project.get("onderdelen", [])],
+        "materieel":   materieel_regels(project),   # bevroren mét ingerekende marge
         "totaal":      _bereken_project_totaal_live(project),
     }
 
@@ -1257,6 +1314,14 @@ def bereken_project_totaal(project):
     if _snapshot_actief(project):
         return dict(project["prijs_snapshot"]["totaal"])
     return _bereken_project_totaal_live(project)
+
+def materieel_lijst(project):
+    """Materieelregels voor WEERGAVE (scherm/PDF/sjabloon) — uit de prijs-snapshot
+    indien bevroren, anders live. Tegenhanger van bereken_onderdelen_lijst; gebruik
+    materieel_regels() alleen waar je bewust de live-waarde wilt."""
+    if _snapshot_actief(project):
+        return [dict(r) for r in project["prijs_snapshot"].get("materieel", [])]
+    return materieel_regels(project)
 
 def bereken_onderdelen_lijst(project, marge_pct, btw_pct):
     """Per-onderdeel berekeningen — uit de prijs-snapshot indien bevroren, anders live."""
@@ -1319,6 +1384,7 @@ VAL_LIMIETEN = {
     "prijs":     (0,         1_000_000),
     "uurtarief": (1,         10_000),
     "aantal":    (1,         1_000_000),
+    "procent":   (0,         100),        # winstmarge op een materieelregel
 }
 
 _VAL_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
@@ -1997,7 +2063,24 @@ def _sjb_context(project, soort):
         dagen = _inst_getal(inst, "betalingstermijn", 14, int)
     onderdelen = [_sjb_onderdeel_regel(o, bereken_onderdeel(o, marge, btw, project_id=project.get("id")))
                   for o in project.get("onderdelen", [])]
+    # Materieel & Overig als gewone regels ACHTER de onderdelen: het sjabloon van de
+    # klant heeft één tabel met één rij-tag, dus zo verschijnen ze automatisch onderaan
+    # die tabel — zonder dat het sjabloon aangepast hoeft te worden. Dezelfde sleutels,
+    # met "—" waar een steiger nu eenmaal geen m²/lagen heeft. Daarnaast een aparte
+    # `materieel`-lijst voor sjablonen die ze los willen tonen.
+    _mat_sjb = materieel_lijst(project)
+    for _mr in _mat_sjb:
+        onderdelen.append({
+            "onderdeel_naam": _mr["omschrijving"], "naam": _mr["omschrijving"],
+            "hoeveelheid": "—", "hoeveelheid_getal": "", "eenheid": "",
+            "lagen": "—", "werkzaamheden": "Materieel & Overig",
+            "materiaal": "—", "arbeid": "—", "toeslagen": "—",
+            "regelbedrag": format_eur(_mr["totaal"]),
+        })
     return {
+        "materieel": [{"omschrijving": _m["omschrijving"],
+                       "bedrag": format_eur(_m["totaal"])} for _m in _mat_sjb],
+        "totaal_materieel": format_eur(sum(_m["totaal"] for _m in _mat_sjb)),
         "bedrijfsnaam": inst.get("bedrijfsnaam", ""),
         "bedrijf_adres": inst.get("adres", ""),
         "bedrijf_postcode_plaats": f"{inst.get('postcode', '')} {inst.get('plaats', '')}".strip(),
@@ -2744,6 +2827,26 @@ def maak_offerte_pdf(project):
 
         pdf.set_y(yc + card_h + 3)
 
+    # ── Materieel & Overig — compacte regels onder de onderdeelkaarten ──
+    # Zelfde bedragen als op het scherm (materieel_lijst is snapshot-bewust). Het
+    # getoonde bedrag is INCLUSIEF de marge; de marge zelf is intern en hoort niet
+    # op een klantdocument.
+    _mat_pdf = materieel_lijst(project)
+    if _mat_pdf:
+        chk(14 + 7 * len(_mat_pdf))
+        pdf.ln(1)
+        pdf.set_font("Arial", "B", 8); pdf.set_text_color(*TLIGHT)
+        pdf.set_xy(ML + 7, pdf.get_y()); pdf.cell(100, 6, "MATERIEEL & OVERIG")
+        pdf.ln(7)
+        for _mr in _mat_pdf:
+            yr = pdf.get_y()
+            br(ML, yr, CW, 9, WHITE, BORDER)
+            pdf.set_font("Arial", "", 9); pdf.set_text_color(*TDARK)
+            pdf.set_xy(ML + 7, yr + 1.9); pdf.cell(CW - 70, 5, str(_mr["omschrijving"])[:56])
+            pdf.set_font("Arial", "B", 9.5); pdf.set_text_color(*NAVY)
+            pdf.set_xy(ML + CW - 60, yr + 1.9); pdf.cell(57, 5, fmt(_mr["totaal"]), align="R")
+            pdf.set_y(yr + 11)
+
     # ════════════════════════════════════════════════════════
     # 6. TOTALEN BLOK — eindbedrag dominant (punt 5)
     # ════════════════════════════════════════════════════════
@@ -3195,6 +3298,24 @@ def maak_factuur_pdf(project):
         pdf.set_xy(ML + CW - 34, ry + 1.9); pdf.cell(30, 5, fmt(calc["excl_btw"]), align="R")
         hl(ry + rowh, ML, ML + CW, (236, 239, 244))
         pdf.set_y(ry + rowh)
+
+    # ── Materieel & Overig — dezelfde tabel, zonder hoeveelheidskolom ──
+    # Doorlopende nummering na de onderdelen, zodat de factuurregels aansluiten.
+    # Bedrag = incl. marge (materieel_lijst), gelijk aan scherm en offerte.
+    _mat_fac = materieel_lijst(project)
+    for _mj, _mr in enumerate(_mat_fac):
+        chk(8.5)
+        ry = pdf.get_y()
+        if _zebra:
+            fr(ML, ry, CW, 7.5, (250, 251, 253))
+        _zebra = not _zebra
+        pdf.set_font("Arial", "B", 9); pdf.set_text_color(*INK)
+        pdf.set_xy(ML + 4, ry + 1.6)
+        pdf.cell(100, 5, f"{len(_ond_lst) + _mj + 1}.   {str(_mr['omschrijving'])[:46]}")
+        pdf.set_font("Arial", "B", 9.5); pdf.set_text_color(*INK)
+        pdf.set_xy(ML + CW - 34, ry + 1.9); pdf.cell(30, 5, fmt(_mr["totaal"]), align="R")
+        hl(ry + 7.5, ML, ML + CW, (236, 239, 244))
+        pdf.set_y(ry + 7.5)
 
     # ════════════════════════════════════════════════════════
     # 5. TOTALEN — breakdown + TE BETALEN band
@@ -4341,7 +4462,9 @@ div[data-testid="stTextInput"] input[placeholder*="Zoek"] {
 
 /* Verborgen navigatieknoppen achter de klikbare projectrijen op het dashboard.
    Meteen via CSS wegzetten (niet pas via JS), anders flitst '→openprojN' kort in beeld. */
-[class*="st-key-db_open_proj_"]{
+[class*="st-key-db_open_proj_"],
+/* idem voor de prullenbakken in de Materieel & Overig-subtabel ('→matdelN') */
+[class*="st-key-mat_del_"]{
     position:fixed !important;left:-9999px !important;top:-9999px !important;
     width:1px !important;height:1px !important;overflow:hidden !important;
     opacity:0 !important;pointer-events:none !important;}
@@ -6213,12 +6336,31 @@ elif selected == "Projecten":
     /* stColumn krijgt GEEN witte achtergrond — transparant laten zodat de multiselect-dropdown
        niet wordt afgedekt door de achterliggende witte achtergrond van een zusterkolom (oc3) */
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] span.pj-ond-mk) [data-testid="stColumn"]{border:none !important;box-shadow:none !important;}
+    /* ── Materieel & Overig: even hoog als de kaart Onderdeel toevoegen ernaast ──
+       Streamlit-kolommen zijn een flexrij, maar de kaarten krimpen standaard naar hun
+       eigen inhoud. Deze keten (rij → kolom → border-wrapper → binnenblok) rekt de
+       rechterkaart door tot de hoogte van de linker. Alleen actief op de rij die de
+       materieel-kaart bevat, dus geen andere kolomlayout wordt geraakt. */
+    [data-testid="stHorizontalBlock"]:has(span.pj-mat-mk){align-items:stretch !important;}
+    [data-testid="stHorizontalBlock"]:has(span.pj-mat-mk) > [data-testid="stColumn"]{display:flex !important;flex-direction:column !important;}
+    [data-testid="stHorizontalBlock"]:has(span.pj-mat-mk) > [data-testid="stColumn"] > [data-testid="stVerticalBlock"]{flex:1 1 auto !important;}
+    [data-testid="stHorizontalBlock"]:has(span.pj-mat-mk) > [data-testid="stColumn"] [data-testid="stLayoutWrapper"]:has(span.pj-ond-mk){height:100% !important;}
+    /* Wis-knopje naast 'Toevoegen aan project': compact en rood-op-hover, zoals de
+       andere verwijderacties in de app. */
+    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{border:1.5px solid #E2E8F0 !important;border-radius:10px !important;color:#64748B !important;padding-left:0 !important;padding-right:0 !important;}
+    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{border-color:#FCA5A5 !important;color:#DC2626 !important;background:#FEF2F2 !important;}
     /* Toevoegen-knop: outline stijl (marker + volgende container) */
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{background:white !important;color:#0F172A !important;border:1.5px solid #E2E8F0 !important;border-radius:10px !important;font-weight:600 !important;}
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{background:#F8FAFC !important;border-color:#CBD5E1 !important;}
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stMarkdownContainer"]{background:transparent !important;border:none !important;}
     /* ── Onderdeel verwijderen via long-press ── */
     .pd-table tbody tr.pd-ond-row{cursor:pointer;user-select:none;-webkit-user-select:none;}
+    /* ── Materieel & Overig-subtabel: iets compacter dan de onderdelen-tabel, met een
+       prullenbak achter elke regel. Rood pas bij hover, zodat de tabel rustig blijft. */
+    .pd-mat-card{margin-top:-4px;}
+    .pd-mat-card .pd-table td{padding:9px 14px;}
+    .pd-mat-del{cursor:pointer;color:#CBD5E1;font-size:14px;padding:4px 6px;border-radius:7px;display:inline-flex;transition:color .12s,background .12s;}
+    .pd-mat-del:hover{color:#DC2626;background:#FEF2F2;}
     @keyframes pdHoldFill{from{background-size:0% 100%;}to{background-size:100% 100%;}}
     .pd-table tbody tr.pd-ond-pressing td{
         background-image:linear-gradient(90deg,#FECACA,#FCA5A5) !important;
@@ -6772,6 +6914,81 @@ p.addEventListener('scroll',cancel,true);
 p._ondLp={down:down,cancel:cancel,move:move,st:st};
 })();</script>""", height=0, scrolling=False)
 
+                    # ── Materieel & Overig: compacte subtabel ──
+                    # Verschijnt alleen als er regels zijn, direct onder de onderdelen-tabel
+                    # en boven de balk 'Totaal excl. BTW'. Geen m²/lagen-kolommen: een steiger
+                    # heeft die niet. Snapshot-bewust (materieel_lijst), zodat een bevroren
+                    # offerte hier exact dezelfde bedragen toont als op de PDF.
+                    _mat_rows = materieel_lijst(project)
+                    if _mat_rows:
+                        _mat_tbody = ""
+                        for _mi, _mr in enumerate(_mat_rows):
+                            _mat_tbody += (
+                                f'<tr>'
+                                f'<td class="nm">{h(_mr["omschrijving"])}</td>'
+                                f'<td class="r" style="white-space:nowrap;">{format_eur(_mr["bedrag"])}</td>'
+                                f'<td class="r" style="color:#475569;">{_mr["marge"]:g}%</td>'
+                                f'<td class="r" style="font-weight:700;white-space:nowrap;">{format_eur(_mr["totaal"])}</td>'
+                                f'<td class="r" style="width:44px;">'
+                                f'<span class="pd-mat-del" data-mi="{_mi}" title="Regel verwijderen">'
+                                f'<i class="bi bi-trash"></i></span></td>'
+                                f'</tr>')
+                        st.markdown(
+                            f'<div class="pd-card pd-mat-card">'
+                            f'<div class="pd-sec-head">'
+                            f'<div class="pd-sec-icon-box">'
+                            f'<i class="bi bi-tools" style="font-size:15px;color:#2563EB;"></i>'
+                            f'</div>'
+                            f'<span class="pd-sec-title">Materieel &amp; Overig</span>'
+                            f'</div>'
+                            f'<div class="pd-table-wrap">'
+                            f'<table class="pd-table"><thead><tr>'
+                            f'<th>Omschrijving</th><th class="r">Bedrag</th>'
+                            f'<th class="r">Marge %</th><th class="r">Totaal</th><th></th>'
+                            f'</tr></thead><tbody>{_mat_tbody}</tbody></table>'
+                            f'</div>'
+                            f'</div>',
+                            unsafe_allow_html=True)
+
+                        # Verborgen knoppen — één per regel; de JS hieronder koppelt het
+                        # prullenbak-icoon eraan. Zelfde aanpak als de klikbare projectrijen
+                        # op het dashboard: de HTML-tabel blijft puur presentatie.
+                        for _mi in range(len(_mat_rows)):
+                            if st.button(f"→matdel{_mi}", key=f"mat_del_{_pid}_{_mi}"):
+                                _pr = st.session_state.projecten[project_idx]
+                                _lijst = _pr.get("materieel") or []
+                                if 0 <= _mi < len(_lijst):
+                                    _weg = _lijst.pop(_mi)
+                                    verzeker_prijs_snapshot(_pr)
+                                    save_data()
+                                    ui_alert(f"'{_weg.get('omschrijving', 'Regel')}' verwijderd.")
+                                st.rerun()
+
+                        _html_component("""<script>(function(){
+function wire(){
+    var p=window.parent.document;
+    var perIdx={};
+    var all=p.querySelectorAll('button');
+    for(var j=0;j<all.length;j++){
+        var mm=all[j].textContent.trim().match(/^→matdel([0-9]+)$/);
+        if(!mm) continue;
+        perIdx[mm[1]]=all[j];
+        var w=all[j].closest('[data-testid="stButton"]');
+        if(w) w.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;';
+    }
+    p.querySelectorAll('.pd-mat-del').forEach(function(ic){
+        var b=perIdx[ic.getAttribute('data-mi')];
+        if(b) ic.onclick=function(ev){ev.stopPropagation();b.click();};
+    });
+}
+wire();
+var obs=new MutationObserver(function(){
+    clearTimeout(window._matDelT);
+    window._matDelT=setTimeout(wire,30);
+});
+obs.observe(window.parent.document.body,{childList:true,subtree:true});
+})();</script>""", height=0, scrolling=False)
+
                     # ── Totaal card ──
                     totaal = bereken_project_totaal(project)
                     # SP-012: waarschuwing onder minimale projectprijs (Instellingen → Financieel)
@@ -6854,7 +7071,12 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                     # middenkolom gezet en bij opslaan meegenomen (engine rekent naar oppervlak).
                     _ond_houttype = None
                     _ond_houttype_waarde = 0.0
-                    with st.container(border=True):
+                    # Twee kaarten naast elkaar: links het onderdeel-formulier, rechts
+                    # "Materieel & Overig". Bewust `kolom.container()` i.p.v. een `with
+                    # kolom:`-blok eromheen — dat plaatst dezelfde kaart in de kolom
+                    # zonder dat het bestaande formulier (±160 regels) hoeft te verschuiven.
+                    _ond_col, _mat_col = st.columns([62, 38], gap="medium")
+                    with _ond_col.container(border=True):
                         st.markdown('<span class="pj-ond-mk" style="display:none;"></span>', unsafe_allow_html=True)
                         st.markdown(
                             '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">'
@@ -7019,6 +7241,111 @@ p._ondLp={down:down,cancel:cancel,move:move,st:st};
                                 st.rerun()
                             else:
                                 ui_alert(_ond_fout, "error")
+
+                    # ── Materieel & Overig — losse kostenregels zonder m²/lagen ──
+                    # Steiger, machinehuur, verschotten: wél kosten, geen oppervlak en
+                    # geen lagen. Daarom een eigen, compacte invoer i.p.v. een onderdeel.
+                    # Zelfde marker-klasse pj-ond-mk → gegarandeerd exact dezelfde
+                    # kaartstyling als hiernaast; pj-mat-mk is alleen de layout-haak.
+                    _mat_nonce = st.session_state.get(f"mat_nonce_{_pid}", 0)
+                    _mat_sfx   = f"{_pid}_{_mat_nonce}"
+                    _mat_oms_k, _mat_bed_k, _mat_mrg_k = (
+                        f"mat_oms_{_mat_sfx}", f"mat_bed_{_mat_sfx}", f"mat_mrg_{_mat_sfx}")
+                    _mat_open = st.session_state.get(f"mat_open_{_pid}", False)
+                    with _mat_col.container(border=True):
+                        st.markdown('<span class="pj-ond-mk pj-mat-mk" style="display:none;"></span>',
+                                    unsafe_allow_html=True)
+                        st.markdown(
+                            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">'
+                            '<i class="bi bi-tools" style="font-size:20px;color:#2563EB;flex-shrink:0;"></i>'
+                            '<div style="font-size:14px;font-weight:700;color:#0F172A;">Materieel &amp; Overig</div>'
+                            '</div>',
+                            unsafe_allow_html=True)
+                        st.markdown('<span class="pj-mat-new-mk" style="display:none;"></span>',
+                                    unsafe_allow_html=True)
+                        if st.button("Toevoegen", key=f"mat_new_{_pid}", type="primary",
+                                     use_container_width=True, icon=":material/add:",
+                                     help="Voeg een kostenregel toe zonder m² of lagen — "
+                                          "bijvoorbeeld steigerhuur"):
+                            st.session_state[f"mat_open_{_pid}"] = True
+                            st.rerun()
+
+                        if _mat_open:
+                            st.markdown('<div style="height:14px;"></div>', unsafe_allow_html=True)
+                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Omschrijving <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
+                            _mat_oms = st.text_input("Omschrijving", placeholder="Bijv: Rolsteiger huur",
+                                                     label_visibility="collapsed", key=_mat_oms_k)
+                            _mc1, _mc2 = st.columns(2)
+                            with _mc1:
+                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Bedrag (€)</div>', unsafe_allow_html=True)
+                                _mat_bed = st.number_input("Bedrag", min_value=0.0, step=10.0,
+                                                           format="%.2f", label_visibility="collapsed",
+                                                           key=_mat_bed_k,
+                                                           help="Excl. BTW. De marge komt hier bovenop.")
+                            with _mc2:
+                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Winstmarge (%)</div>', unsafe_allow_html=True)
+                                _mat_mrg = st.number_input("Winstmarge", min_value=0.0, max_value=100.0,
+                                                           step=1.0, format="%.0f",
+                                                           label_visibility="collapsed", key=_mat_mrg_k)
+                            # Live meekijken wat de klant betaalt — voorkomt verrassingen
+                            # bij het margepercentage.
+                            if float(_mat_bed or 0) > 0:
+                                st.markdown(
+                                    f'<div style="font-size:12px;color:#64748B;margin:6px 0 2px;">'
+                                    f'Regeltotaal: <strong style="color:#0F172A;">'
+                                    f'{format_eur(float(_mat_bed) * (1 + float(_mat_mrg or 0) / 100))}</strong>'
+                                    f'</div>', unsafe_allow_html=True)
+                            _mb1, _mb2 = st.columns([3, 1])
+                            with _mb1:
+                                st.markdown('<span class="pj-mat-ok-mk" style="display:none;"></span>',
+                                            unsafe_allow_html=True)
+                                if st.button("Toevoegen aan project", key=f"mat_ok_{_pid}",
+                                             use_container_width=True, icon=":material/check:"):
+                                    _mat_fout = eerste_validatiefout(
+                                        valideer_tekst(_mat_oms, "Omschrijving", min_len=2),
+                                        valideer_getal(_mat_bed, "prijs", "Bedrag", toestaan_nul=False),
+                                        valideer_getal(_mat_mrg, "procent", "Winstmarge"),
+                                    )
+                                    if _mat_fout:
+                                        ui_alert(_mat_fout, "error")
+                                    else:
+                                        _pr = st.session_state.projecten[project_idx]
+                                        _pr.setdefault("materieel", []).append({
+                                            "omschrijving": _mat_oms.strip(),
+                                            "bedrag": round(float(_mat_bed), 2),
+                                            "marge": float(_mat_mrg or 0),
+                                        })
+                                        # SP-008: offerte-inhoud gewijzigd → snapshot verversen,
+                                        # net als bij een onderdeel erbij/eraf.
+                                        verzeker_prijs_snapshot(_pr)
+                                        save_data()
+                                        st.session_state[f"mat_open_{_pid}"] = False
+                                        for _mk in (_mat_oms_k, _mat_bed_k, _mat_mrg_k):
+                                            st.session_state.pop(_mk, None)
+                                        st.session_state[f"mat_nonce_{_pid}"] = _mat_nonce + 1
+                                        ui_alert("Toegevoegd aan project!")
+                                        st.rerun()
+                            with _mb2:
+                                st.markdown('<span class="pj-mat-del-mk" style="display:none;"></span>',
+                                            unsafe_allow_html=True)
+                                if st.button("", key=f"mat_wis_{_pid}", use_container_width=True,
+                                             icon=":material/delete:", help="Regel wissen"):
+                                    st.session_state[f"mat_open_{_pid}"] = False
+                                    for _mk in (_mat_oms_k, _mat_bed_k, _mat_mrg_k):
+                                        st.session_state.pop(_mk, None)
+                                    st.session_state[f"mat_nonce_{_pid}"] = _mat_nonce + 1
+                                    st.rerun()
+                        else:
+                            _mat_n = len(project.get("materieel") or [])
+                            st.markdown(
+                                f'<div style="font-size:12.5px;color:#94A3B8;line-height:1.55;margin-top:14px;">'
+                                f'Voor kosten zonder oppervlak of lagen — steiger, machinehuur, '
+                                f'verschotten. Ze tellen mee in het projecttotaal en komen op de '
+                                f'offerte en factuur.'
+                                + (f'<br><span style="color:#475569;font-weight:600;">'
+                                   f'{_mat_n} regel{"s" if _mat_n != 1 else ""} toegevoegd</span>'
+                                   if _mat_n else '')
+                                + '</div>', unsafe_allow_html=True)
 
                 st.markdown('<span class="pj-terug-mk" style="display:none;"></span>', unsafe_allow_html=True)
                 if st.button("← Terug naar overzicht", key="pj_terug"):

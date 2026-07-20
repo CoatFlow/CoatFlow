@@ -354,6 +354,7 @@ def _project_row(p: dict) -> dict:
         "status": p.get("status", "Concept"), "aangemaakt": p.get("aangemaakt", ""),
         "notities": p.get("notities", ""), "btw": p.get("btw"), "marge": p.get("marge"),
         "onderdelen": p.get("onderdelen") or [],
+        "materieel": p.get("materieel") or [],
         "offerte_nummer": p.get("offerte_nummer"),
         "factuur_nummer": p.get("factuur_nummer"), "factuur_datum": p.get("factuur_datum"),
         "prijs_snapshot": p.get("prijs_snapshot"),   # None of jsonb — exact bewaren
@@ -563,6 +564,9 @@ def _load_impl(cl, company_id) -> dict:
     for r in proj_rows:
         p = _clean(r)
         p["onderdelen"] = r.get("onderdelen") or []
+        # Materieel & Overig (steiger, huur, verschotten). Kolom kan bij een nog niet
+        # gemigreerde database ontbreken → dan gewoon een lege lijst, geen crash.
+        p["materieel"] = r.get("materieel") or []
         p["medewerkers"] = sorted(mw_by_proj.get(r["id"], []))
         projecten.append(p)
     for mw in personeel:

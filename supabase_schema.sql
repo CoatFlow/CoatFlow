@@ -131,6 +131,9 @@ create table if not exists projecten (
     btw            numeric,
     marge          numeric,
     onderdelen     jsonb  not null default '[]'::jsonb,
+    -- Materieel & Overig: losse kostenregels zonder m²/lagen (steiger, huur,
+    -- verschotten). [{omschrijving, bedrag, marge}] — bedrag is excl. BTW.
+    materieel      jsonb  not null default '[]'::jsonb,
     offerte_nummer text,
     factuur_nummer text,
     factuur_datum  text,
