@@ -6349,6 +6349,9 @@ elif selected == "Projecten":
        andere verwijderacties in de app. */
     [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{border:1.5px solid #E2E8F0 !important;border-radius:10px !important;color:#64748B !important;padding-left:0 !important;padding-right:0 !important;}
     [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{border-color:#FCA5A5 !important;color:#DC2626 !important;background:#FEF2F2 !important;}
+    /* Prullenbak-glyph op de (labelloze) wis-knop via Bootstrap-icons, zoals de rest
+       van de app — Streamlit icon= (Material Symbols) gaf hier een leeg wit blok. */
+    [data-testid="stElementContainer"]:has(span.pj-mat-del-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]::before{font-family:"bootstrap-icons" !important;content:"\\f5de";font-size:15px;font-style:normal;font-weight:400;line-height:1;}
     /* Toevoegen-knop: outline stijl (marker + volgende container) */
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{background:white !important;color:#0F172A !important;border:1.5px solid #E2E8F0 !important;border-radius:10px !important;font-weight:600 !important;}
     [data-testid="stElementContainer"]:has(span.pj-ond-add-mk)+[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{background:#F8FAFC !important;border-color:#CBD5E1 !important;}
@@ -7027,325 +7030,330 @@ obs.observe(window.parent.document.body,{childList:true,subtree:true});
                         with st.expander("Kosten breakdown analyse", expanded=False):
                             render_kosten_breakdown(totaal, marge, btw)
 
-                    # ── Onderdeel toevoegen — zelfde dynamische 3-koloms workflow als de Calculatiepagina:
-                    #    LINKS "wat & wie?"  → naam · werkzaamheden · arbeidsuren
-                    #    MIDDEN "hoe groot?" → DYNAMISCHE afmetingen: alleen de velden die bij de gekozen
-                    #                          werkzaamheden horen (via de gedeelde dimensie_flags()/lengte_label()).
-                    #    RECHTS "toeslagen?" → toeslagen (ongewijzigd).
-                    #    De reken-engine, de opgeslagen onderdeel-structuur, de arbeidsuren-logica en de
-                    #    validatie blijven ONGEWIJZIGD; verborgen dimensies tellen als effectieve waarde
-                    #    (m²=0 / lagen=1 / meters=0) mee — exact zoals de Calculatiepagina.
-                    _pid       = project["id"]
-                    # Nonce in de keys: na toevoegen verhogen we 'm zodat de widgets
-                    # vers (leeg) renderen — keyed widgets resetten niet via pop() alleen.
-                    _nonce     = st.session_state.get(f"ond_nonce_{_pid}", 0)
-                    _sfx       = f"{_pid}_{_nonce}"
-                    _wz_key    = f"ond_wz_{_sfx}"
-                    _lagen_key = f"ond_lagen_{_sfx}"
-                    _naam_key  = f"ond_naam_{_sfx}"
-                    _m2_key    = f"ond_m2_{_sfx}"
-                    _meters_key = f"ond_meters_{_sfx}"
-                    _th_key, _ts_key, _tb_key = f"ond_th_{_sfx}", f"ond_ts_{_sfx}", f"ond_tb_{_sfx}"
-                    _twk_key, _tav_key, _twn_key = f"ond_twk_{_sfx}", f"ond_tav_{_sfx}", f"ond_twn_{_sfx}"
-                    _uren_key, _uren_touched_key = f"ond_uren_{_sfx}", f"ond_uren_touched_{_sfx}"
-                    _houttype_key, _houttype_waarde_key = f"ond_houttype_{_sfx}", f"ond_houttype_waarde_{_sfx}"
-                    _houtwerk_lagen_key = f"ond_houtwerk_lagen_{_sfx}"
-                    # Beginwaarden via setdefault (géén value= op de widgets → voorkomt de
-                    # "widget met default én Session-State-waarde"-waarschuwing, net als op Calculaties).
-                    st.session_state.setdefault(_naam_key, "")
-                    st.session_state.setdefault(_m2_key, 20)
-                    st.session_state.setdefault(_lagen_key, 2)
-                    st.session_state.setdefault(_meters_key, 0)
-                    st.session_state.setdefault(_houttype_key, "Kozijnen")
-                    st.session_state.setdefault(_houttype_waarde_key, 0.0)
-                    st.session_state.setdefault(_houtwerk_lagen_key, HOUTWERK_LAGEN)
-                    # Persistentie-lus (identiek aan Calculaties): een tijdelijk verborgen dimensieveld
-                    # behoudt zijn waarde over reruns i.p.v. terug te vallen op de default.
-                    for _ok in (_naam_key, _m2_key, _lagen_key, _meters_key, _wz_key,
-                                _houttype_key, _houttype_waarde_key, _houtwerk_lagen_key,
-                                _uren_key, _uren_touched_key, _th_key, _ts_key, _tb_key,
-                                _twk_key, _tav_key, _twn_key):
-                        if _ok in st.session_state:
-                            st.session_state[_ok] = st.session_state[_ok]
-                    # Houtwerk-type + hoeveelheid (alleen bij "Houtwerk schilderen"); in de
-                    # middenkolom gezet en bij opslaan meegenomen (engine rekent naar oppervlak).
-                    _ond_houttype = None
-                    _ond_houttype_waarde = 0.0
-                    # Twee kaarten naast elkaar: links het onderdeel-formulier, rechts
-                    # "Materieel & Overig". Bewust `kolom.container()` i.p.v. een `with
-                    # kolom:`-blok eromheen — dat plaatst dezelfde kaart in de kolom
-                    # zonder dat het bestaande formulier (±160 regels) hoeft te verschuiven.
-                    _ond_col, _mat_col = st.columns([62, 38], gap="medium")
-                    with _ond_col.container(border=True):
-                        st.markdown('<span class="pj-ond-mk" style="display:none;"></span>', unsafe_allow_html=True)
-                        st.markdown(
-                            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">'
-                            '<i class="bi bi-plus-circle-fill" style="font-size:20px;color:#2563EB;flex-shrink:0;"></i>'
-                            '<div style="font-size:14px;font-weight:700;color:#0F172A;">Onderdeel toevoegen</div>'
-                            '</div>',
-                            unsafe_allow_html=True)
-                        oc1, oc2, oc3 = st.columns(3)
-                        # ── LINKS: naam · werkzaamheden · arbeidsuren ──
-                        with oc1:
-                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Naam onderdeel <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
-                            ond_naam = st.text_input("Naam onderdeel", placeholder="Bijv: Slaapkamer", label_visibility="collapsed", key=_naam_key)
-                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Werkzaamheden <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
-                            ond_wz    = st.multiselect("Werkzaamheden", WERKZAAMHEDEN_OPTIES,
-                                                       placeholder="Kies werkzaamheden…",
-                                                       label_visibility="collapsed", key=_wz_key)
-                            # Welke dimensievelden horen bij de selectie? (bepaalt de middenkolom) — gedeelde helper
-                            _show_kit, _show_afplak, _show_meters, _show_m2, _show_lagen, _show_houtwerk = dimensie_flags(ond_wz)
-                            # Effectieve dimensies uit session-state (de middenkolom-widgets renderen pas
-                            # daarna); een verborgen dimensie telt niet mee (m²=0 / lagen=1 / meters=0).
-                            _eff_m2     = st.session_state.get(_m2_key, 0)     if _show_m2     else 0
-                            _eff_lagen  = st.session_state.get(_lagen_key, 1)  if _show_lagen  else 1
-                            _eff_meters = st.session_state.get(_meters_key, 0) if _show_meters else 0
-                            # Houtwerk: effectief schilderoppervlak (type + hoeveelheid) met 2 lagen,
-                            # exact zoals de engine → auto-uren preview klopt met het resultaat.
-                            _eff_hout_m2 = (houtwerk_effectief_m2(st.session_state.get(_houttype_key),
-                                                                  st.session_state.get(_houttype_waarde_key, 0))
-                                            if _show_houtwerk else 0)
-                            _uren_m2    = _eff_hout_m2 if _show_houtwerk else _eff_m2
-                            _uren_lagen = (st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)
-                                           if _show_houtwerk else _eff_lagen)
-                            # Arbeidsuren: automatisch via centrale productienormen, handmatig te overschrijven.
-                            _auto_uren = round(auto_arbeidsuren(
-                                ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2,
-                                houttype=(st.session_state.get(_houttype_key) if _show_houtwerk else None),
-                                houttype_waarde=(st.session_state.get(_houttype_waarde_key, 0) if _show_houtwerk else 0)), 1)
-                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Arbeidsuren <span style="color:#94A3B8;font-weight:400;">· auto, aanpasbaar</span></div>', unsafe_allow_html=True)
-                            ond_uren = render_arbeidsuren(
-                                _auto_uren,
-                                (tuple(ond_wz), _uren_m2, _uren_lagen, _eff_meters,
-                                 st.session_state.get(_houttype_key),
-                                 st.session_state.get(_houttype_waarde_key, 0)),
-                                _uren_key, _uren_touched_key,
-                                label_visibility="collapsed")
-                        # ── MIDDEN: DYNAMISCHE afmetingen — alleen de velden die bij de selectie horen ──
-                        with oc2:
-                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Afmetingen</div>', unsafe_allow_html=True)
-                            if not ond_wz:
-                                st.markdown(
-                                    '<div style="color:#94A3B8;font-size:12.5px;padding:6px 2px 0;line-height:1.5;">'
-                                    '<i class="bi bi-arrow-left" style="margin-right:5px;color:#CBD5E1;"></i>'
-                                    'Kies eerst werkzaamheden — de benodigde afmetingen verschijnen hier.'
-                                    '</div>', unsafe_allow_html=True)
-                            else:
-                                # Houtwerk: Type houtwerk + typespecifiek maatveld vervangen de
-                                # generieke m²/lagen (gedeelde helper; engine rekent naar oppervlak).
-                                if _show_houtwerk:
-                                    _ond_houttype, _ond_houttype_waarde = render_houttype(_houttype_key, _houttype_waarde_key)
-                                    st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Aantal lagen</div>', unsafe_allow_html=True)
-                                    st.number_input("Aantal lagen (houtwerk)", min_value=1, max_value=5, label_visibility="collapsed", key=_houtwerk_lagen_key)
-                                if _show_m2:
-                                    st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Oppervlakte (m²) <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
-                                    st.number_input("Oppervlakte (m²)", min_value=0, label_visibility="collapsed", key=_m2_key)
-                                if _show_meters:
-                                    # Contextlabel op basis van de selectie; één gedeelde meters-waarde.
-                                    _lbl = lengte_label(_show_kit, _show_afplak)
-                                    st.markdown(f'<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">{_lbl} <span style="color:#94A3B8;font-weight:400;">· per strekkende meter</span></div>', unsafe_allow_html=True)
-                                    st.number_input(_lbl, min_value=0, label_visibility="collapsed", key=_meters_key,
-                                                    help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
-                                if _show_lagen:
-                                    # Lagen-limiet: max 2 als álle gekozen werkzaamheden Gronden/Afplakken/Kitwerk zijn.
-                                    _ond_maxlagen = max_lagen_voor(ond_wz)
-                                    if st.session_state.get(_lagen_key, 2) > _ond_maxlagen:
-                                        st.session_state[_lagen_key] = _ond_maxlagen
-                                    st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Aantal lagen</div>', unsafe_allow_html=True)
-                                    st.number_input("Aantal lagen", min_value=1, max_value=_ond_maxlagen, label_visibility="collapsed", key=_lagen_key)
-                        # ── RECHTS: toeslagen — alle direct zichtbaar (geen uitklapper) ──
-                        with oc3:
-                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:8px;">Toeslagen</div>', unsafe_allow_html=True)
-                            t_hoogte = st.checkbox("Hoogte (>2.5m)", key=_th_key)
-                            t_spoed  = st.checkbox("Spoed", key=_ts_key)
-                            t_buiten = st.checkbox("Buitenwerk", key=_tb_key)
-                            t_weekend = st.checkbox("Weekend", key=_twk_key)
-                            t_avond   = st.checkbox("Avond",   key=_tav_key)
-                            t_winter  = st.checkbox("Winter",  key=_twn_key)
+                # ── Onderdeel toevoegen — zelfde dynamische 3-koloms workflow als de Calculatiepagina:
+                #    LINKS "wat & wie?"  → naam · werkzaamheden · arbeidsuren
+                #    MIDDEN "hoe groot?" → DYNAMISCHE afmetingen: alleen de velden die bij de gekozen
+                #                          werkzaamheden horen (via de gedeelde dimensie_flags()/lengte_label()).
+                #    RECHTS "toeslagen?" → toeslagen (ongewijzigd).
+                #    De reken-engine, de opgeslagen onderdeel-structuur, de arbeidsuren-logica en de
+                #    validatie blijven ONGEWIJZIGD; verborgen dimensies tellen als effectieve waarde
+                #    (m²=0 / lagen=1 / meters=0) mee — exact zoals de Calculatiepagina.
+                _pid       = project["id"]
+                # Nonce in de keys: na toevoegen verhogen we 'm zodat de widgets
+                # vers (leeg) renderen — keyed widgets resetten niet via pop() alleen.
+                _nonce     = st.session_state.get(f"ond_nonce_{_pid}", 0)
+                _sfx       = f"{_pid}_{_nonce}"
+                _wz_key    = f"ond_wz_{_sfx}"
+                _lagen_key = f"ond_lagen_{_sfx}"
+                _naam_key  = f"ond_naam_{_sfx}"
+                _m2_key    = f"ond_m2_{_sfx}"
+                _meters_key = f"ond_meters_{_sfx}"
+                _th_key, _ts_key, _tb_key = f"ond_th_{_sfx}", f"ond_ts_{_sfx}", f"ond_tb_{_sfx}"
+                _twk_key, _tav_key, _twn_key = f"ond_twk_{_sfx}", f"ond_tav_{_sfx}", f"ond_twn_{_sfx}"
+                _uren_key, _uren_touched_key = f"ond_uren_{_sfx}", f"ond_uren_touched_{_sfx}"
+                _houttype_key, _houttype_waarde_key = f"ond_houttype_{_sfx}", f"ond_houttype_waarde_{_sfx}"
+                _houtwerk_lagen_key = f"ond_houtwerk_lagen_{_sfx}"
+                # Beginwaarden via setdefault (géén value= op de widgets → voorkomt de
+                # "widget met default én Session-State-waarde"-waarschuwing, net als op Calculaties).
+                st.session_state.setdefault(_naam_key, "")
+                st.session_state.setdefault(_m2_key, 20)
+                st.session_state.setdefault(_lagen_key, 2)
+                st.session_state.setdefault(_meters_key, 0)
+                st.session_state.setdefault(_houttype_key, "Kozijnen")
+                st.session_state.setdefault(_houttype_waarde_key, 0.0)
+                st.session_state.setdefault(_houtwerk_lagen_key, HOUTWERK_LAGEN)
+                # Persistentie-lus (identiek aan Calculaties): een tijdelijk verborgen dimensieveld
+                # behoudt zijn waarde over reruns i.p.v. terug te vallen op de default.
+                for _ok in (_naam_key, _m2_key, _lagen_key, _meters_key, _wz_key,
+                            _houttype_key, _houttype_waarde_key, _houtwerk_lagen_key,
+                            _uren_key, _uren_touched_key, _th_key, _ts_key, _tb_key,
+                            _twk_key, _tav_key, _twn_key):
+                    if _ok in st.session_state:
+                        st.session_state[_ok] = st.session_state[_ok]
+                # Houtwerk-type + hoeveelheid (alleen bij "Houtwerk schilderen"); in de
+                # middenkolom gezet en bij opslaan meegenomen (engine rekent naar oppervlak).
+                _ond_houttype = None
+                _ond_houttype_waarde = 0.0
+                # Twee kaarten naast elkaar op VOLLE breedte (dit blok staat bewust
+                # buiten col_main). Dezelfde [5,2]-verhouding als de pagina-split
+                # hierboven, zodat het onderdeel-formulier exact zijn oorspronkelijke
+                # (col_main-)breedte houdt en "Materieel & Overig" in de vrije ruimte
+                # rechts staat — even breed als voorheen.
+                _ond_col, _mat_col = st.columns([5, 2], gap="medium")
+                with _ond_col.container(border=True):
+                    st.markdown('<span class="pj-ond-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">'
+                        '<i class="bi bi-plus-circle-fill" style="font-size:20px;color:#2563EB;flex-shrink:0;"></i>'
+                        '<div style="font-size:14px;font-weight:700;color:#0F172A;">Onderdeel toevoegen</div>'
+                        '</div>',
+                        unsafe_allow_html=True)
+                    oc1, oc2, oc3 = st.columns(3)
+                    # ── LINKS: naam · werkzaamheden · arbeidsuren ──
+                    with oc1:
+                        st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Naam onderdeel <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
+                        ond_naam = st.text_input("Naam onderdeel", placeholder="Bijv: Slaapkamer", label_visibility="collapsed", key=_naam_key)
+                        st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Werkzaamheden <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
+                        ond_wz    = st.multiselect("Werkzaamheden", WERKZAAMHEDEN_OPTIES,
+                                                   placeholder="Kies werkzaamheden…",
+                                                   label_visibility="collapsed", key=_wz_key)
+                        # Welke dimensievelden horen bij de selectie? (bepaalt de middenkolom) — gedeelde helper
+                        _show_kit, _show_afplak, _show_meters, _show_m2, _show_lagen, _show_houtwerk = dimensie_flags(ond_wz)
+                        # Effectieve dimensies uit session-state (de middenkolom-widgets renderen pas
+                        # daarna); een verborgen dimensie telt niet mee (m²=0 / lagen=1 / meters=0).
+                        _eff_m2     = st.session_state.get(_m2_key, 0)     if _show_m2     else 0
+                        _eff_lagen  = st.session_state.get(_lagen_key, 1)  if _show_lagen  else 1
+                        _eff_meters = st.session_state.get(_meters_key, 0) if _show_meters else 0
+                        # Houtwerk: effectief schilderoppervlak (type + hoeveelheid) met 2 lagen,
+                        # exact zoals de engine → auto-uren preview klopt met het resultaat.
+                        _eff_hout_m2 = (houtwerk_effectief_m2(st.session_state.get(_houttype_key),
+                                                              st.session_state.get(_houttype_waarde_key, 0))
+                                        if _show_houtwerk else 0)
+                        _uren_m2    = _eff_hout_m2 if _show_houtwerk else _eff_m2
+                        _uren_lagen = (st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)
+                                       if _show_houtwerk else _eff_lagen)
+                        # Arbeidsuren: automatisch via centrale productienormen, handmatig te overschrijven.
+                        _auto_uren = round(auto_arbeidsuren(
+                            ond_wz, _uren_m2, _uren_lagen, _eff_meters, houtwerk_m2=_uren_m2,
+                            houttype=(st.session_state.get(_houttype_key) if _show_houtwerk else None),
+                            houttype_waarde=(st.session_state.get(_houttype_waarde_key, 0) if _show_houtwerk else 0)), 1)
+                        st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Arbeidsuren <span style="color:#94A3B8;font-weight:400;">· auto, aanpasbaar</span></div>', unsafe_allow_html=True)
+                        ond_uren = render_arbeidsuren(
+                            _auto_uren,
+                            (tuple(ond_wz), _uren_m2, _uren_lagen, _eff_meters,
+                             st.session_state.get(_houttype_key),
+                             st.session_state.get(_houttype_waarde_key, 0)),
+                            _uren_key, _uren_touched_key,
+                            label_visibility="collapsed")
+                    # ── MIDDEN: DYNAMISCHE afmetingen — alleen de velden die bij de selectie horen ──
+                    with oc2:
+                        st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Afmetingen</div>', unsafe_allow_html=True)
+                        if not ond_wz:
+                            st.markdown(
+                                '<div style="color:#94A3B8;font-size:12.5px;padding:6px 2px 0;line-height:1.5;">'
+                                '<i class="bi bi-arrow-left" style="margin-right:5px;color:#CBD5E1;"></i>'
+                                'Kies eerst werkzaamheden — de benodigde afmetingen verschijnen hier.'
+                                '</div>', unsafe_allow_html=True)
+                        else:
+                            # Houtwerk: Type houtwerk + typespecifiek maatveld vervangen de
+                            # generieke m²/lagen (gedeelde helper; engine rekent naar oppervlak).
+                            if _show_houtwerk:
+                                _ond_houttype, _ond_houttype_waarde = render_houttype(_houttype_key, _houttype_waarde_key)
+                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Aantal lagen</div>', unsafe_allow_html=True)
+                                st.number_input("Aantal lagen (houtwerk)", min_value=1, max_value=5, label_visibility="collapsed", key=_houtwerk_lagen_key)
+                            if _show_m2:
+                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Oppervlakte (m²) <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
+                                st.number_input("Oppervlakte (m²)", min_value=0, label_visibility="collapsed", key=_m2_key)
+                            if _show_meters:
+                                # Contextlabel op basis van de selectie; één gedeelde meters-waarde.
+                                _lbl = lengte_label(_show_kit, _show_afplak)
+                                st.markdown(f'<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">{_lbl} <span style="color:#94A3B8;font-weight:400;">· per strekkende meter</span></div>', unsafe_allow_html=True)
+                                st.number_input(_lbl, min_value=0, label_visibility="collapsed", key=_meters_key,
+                                                help="Strekkende meters (per meter berekend): kit-/afplakwerk of het strekkende deel van schuur-/grondwerk.")
+                            if _show_lagen:
+                                # Lagen-limiet: max 2 als álle gekozen werkzaamheden Gronden/Afplakken/Kitwerk zijn.
+                                _ond_maxlagen = max_lagen_voor(ond_wz)
+                                if st.session_state.get(_lagen_key, 2) > _ond_maxlagen:
+                                    st.session_state[_lagen_key] = _ond_maxlagen
+                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:14px;">Aantal lagen</div>', unsafe_allow_html=True)
+                                st.number_input("Aantal lagen", min_value=1, max_value=_ond_maxlagen, label_visibility="collapsed", key=_lagen_key)
+                    # ── RECHTS: toeslagen — alle direct zichtbaar (geen uitklapper) ──
+                    with oc3:
+                        st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:8px;">Toeslagen</div>', unsafe_allow_html=True)
+                        t_hoogte = st.checkbox("Hoogte (>2.5m)", key=_th_key)
+                        t_spoed  = st.checkbox("Spoed", key=_ts_key)
+                        t_buiten = st.checkbox("Buitenwerk", key=_tb_key)
+                        t_weekend = st.checkbox("Weekend", key=_twk_key)
+                        t_avond   = st.checkbox("Avond",   key=_tav_key)
+                        t_winter  = st.checkbox("Winter",  key=_twn_key)
 
-                        # Effectieve dimensies voor validatie/opslaan — uit de (nu gerenderde) session-state,
-                        # zodat een verborgen dimensie niet meetelt. Identiek aan wat de zichtbare velden tonen
-                        # en aan de Calculatiepagina.
-                        _save_m2     = st.session_state.get(_m2_key, 0)     if _show_m2     else 0
-                        _save_lagen  = st.session_state.get(_lagen_key, 1)  if _show_lagen  else 1
-                        _save_meters = st.session_state.get(_meters_key, 0) if _show_meters else 0
-                        # Houtwerk: type + hoeveelheid gaan mee (engine rekent naar schilderoppervlak).
-                        _save_houttype        = st.session_state.get(_houttype_key, "Kozijnen") if _show_houtwerk else None
-                        _save_houttype_waarde = st.session_state.get(_houttype_waarde_key, 0.0) if _show_houtwerk else 0.0
-                        _save_houtwerk_lagen  = int(st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)) if _show_houtwerk else HOUTWERK_LAGEN
-                        _save_hout_m2 = houtwerk_effectief_m2(_save_houttype, _save_houttype_waarde) if _show_houtwerk else 0
+                    # Effectieve dimensies voor validatie/opslaan — uit de (nu gerenderde) session-state,
+                    # zodat een verborgen dimensie niet meetelt. Identiek aan wat de zichtbare velden tonen
+                    # en aan de Calculatiepagina.
+                    _save_m2     = st.session_state.get(_m2_key, 0)     if _show_m2     else 0
+                    _save_lagen  = st.session_state.get(_lagen_key, 1)  if _show_lagen  else 1
+                    _save_meters = st.session_state.get(_meters_key, 0) if _show_meters else 0
+                    # Houtwerk: type + hoeveelheid gaan mee (engine rekent naar schilderoppervlak).
+                    _save_houttype        = st.session_state.get(_houttype_key, "Kozijnen") if _show_houtwerk else None
+                    _save_houttype_waarde = st.session_state.get(_houttype_waarde_key, 0.0) if _show_houtwerk else 0.0
+                    _save_houtwerk_lagen  = int(st.session_state.get(_houtwerk_lagen_key, HOUTWERK_LAGEN)) if _show_houtwerk else HOUTWERK_LAGEN
+                    _save_hout_m2 = houtwerk_effectief_m2(_save_houttype, _save_houttype_waarde) if _show_houtwerk else 0
 
-                        st.markdown('<span class="pj-ond-add-mk" style="display:none;"></span>', unsafe_allow_html=True)
-                        if st.button("Onderdeel toevoegen", key=f"ond_add_{_pid}"):
-                            # Centrale invoervalidatie (beta-blocker): blokkeer onrealistische /
-                            # ontbrekende invoer met duidelijke meldingen. Géén wijziging aan de
-                            # calculatielogica — alleen ongeldige invoer wordt tegengehouden.
-                            _ond_fout = eerste_validatiefout(
-                                valideer_tekst(ond_naam, "Naam onderdeel", min_len=2),
-                                valideer_getal(_save_m2, "m2", "Oppervlakte (m²)"),
-                                valideer_getal(_save_meters, "meters", "Lengte (m)"),
-                                valideer_getal(_save_lagen, "lagen", "Aantal lagen", toestaan_nul=False),
-                                valideer_getal(_save_hout_m2, "m2", "Houtwerk schilderoppervlak"),
-                                valideer_getal(ond_uren, "uren", "Arbeidsuren"),
-                            )
-                            if not _ond_fout and not ond_wz:
-                                _ond_fout = "Selecteer minimaal één werkzaamheid."
-                            if (not _ond_fout and float(_save_m2 or 0) <= 0 and float(_save_meters or 0) <= 0
-                                    and float(_save_hout_m2 or 0) <= 0):
-                                _ond_fout = "Vul een oppervlakte (m²), lengte (m) óf houtwerk-hoeveelheid groter dan 0 in."
-                            if not _ond_fout:
-                                # Arbeidsuren-override: alleen vastleggen als de gebruiker de uren
-                                # daadwerkelijk afwijkt van de automatische berekening; anders None
-                                # (blijft automatisch meeberekenen). Houtwerk → effectief oppervlak + 2 lagen.
-                                _auto_final = round(auto_arbeidsuren(
-                                    ond_wz,
-                                    _save_hout_m2 if _show_houtwerk else _save_m2,
-                                    _save_houtwerk_lagen if _show_houtwerk else _save_lagen,
-                                    _save_meters,
-                                    houtwerk_m2=(_save_hout_m2 if _show_houtwerk else _save_m2),
-                                    houttype=(_save_houttype if _show_houtwerk else None),
-                                    houttype_waarde=(_save_houttype_waarde if _show_houtwerk else 0)), 1)
-                                _uren_override = (float(ond_uren)
-                                                  if abs(float(ond_uren) - _auto_final) > 1e-6
-                                                  else None)
-                                st.session_state.projecten[project_idx]["onderdelen"].append({
-                                    "naam": ond_naam, "m2": _save_m2, "lagen": int(_save_lagen),
-                                    "meters": _save_meters,
-                                    "werkzaamheden": ond_wz,
-                                    "toeslag_hoogte": t_hoogte,
-                                    "toeslag_spoed":  t_spoed,
-                                    "toeslag_buiten": t_buiten,
-                                    "toeslag_weekend": t_weekend,
-                                    "toeslag_avond":   t_avond,
-                                    "toeslag_winter":  t_winter,
-                                    "arbeid_uren_override": _uren_override,
-                                    # Houtwerk-type + hoeveelheid (alleen bij Houtwerk schilderen;
-                                    # anders None/0). De engine rekent dit om naar schilderoppervlak.
-                                    "houttype": _save_houttype,
-                                    "houttype_waarde": _save_houttype_waarde,
-                                    "houtwerk_lagen": _save_houtwerk_lagen,
-                                })
-                                # SP-008: offerte-inhoud gewijzigd → snapshot verversen
-                                verzeker_prijs_snapshot(st.session_state.projecten[project_idx])
-                                save_data()
-                                # Invoervelden leegmaken: oude keys opruimen + nonce verhogen
-                                # zodat de widgets met verse (lege) keys terugkomen.
-                                for _k in (_naam_key, _m2_key, _meters_key, _lagen_key, _wz_key,
-                                           _houttype_key, _houttype_waarde_key,
-                                           _th_key, _ts_key, _tb_key,
-                                           _twk_key, _tav_key, _twn_key,
-                                           _uren_key, _uren_touched_key):
-                                    st.session_state.pop(_k, None)
-                                st.session_state[f"ond_nonce_{_pid}"] = _nonce + 1
-                                ui_alert("Onderdeel toegevoegd!")
-                                st.rerun()
-                            else:
-                                ui_alert(_ond_fout, "error")
-
-                    # ── Materieel & Overig — losse kostenregels zonder m²/lagen ──
-                    # Steiger, machinehuur, verschotten: wél kosten, geen oppervlak en
-                    # geen lagen. Daarom een eigen, compacte invoer i.p.v. een onderdeel.
-                    # Zelfde marker-klasse pj-ond-mk → gegarandeerd exact dezelfde
-                    # kaartstyling als hiernaast; pj-mat-mk is alleen de layout-haak.
-                    _mat_nonce = st.session_state.get(f"mat_nonce_{_pid}", 0)
-                    _mat_sfx   = f"{_pid}_{_mat_nonce}"
-                    _mat_oms_k, _mat_bed_k, _mat_mrg_k = (
-                        f"mat_oms_{_mat_sfx}", f"mat_bed_{_mat_sfx}", f"mat_mrg_{_mat_sfx}")
-                    _mat_open = st.session_state.get(f"mat_open_{_pid}", False)
-                    with _mat_col.container(border=True):
-                        st.markdown('<span class="pj-ond-mk pj-mat-mk" style="display:none;"></span>',
-                                    unsafe_allow_html=True)
-                        st.markdown(
-                            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">'
-                            '<i class="bi bi-tools" style="font-size:20px;color:#2563EB;flex-shrink:0;"></i>'
-                            '<div style="font-size:14px;font-weight:700;color:#0F172A;">Materieel &amp; Overig</div>'
-                            '</div>',
-                            unsafe_allow_html=True)
-                        st.markdown('<span class="pj-mat-new-mk" style="display:none;"></span>',
-                                    unsafe_allow_html=True)
-                        if st.button("Toevoegen", key=f"mat_new_{_pid}", type="primary",
-                                     use_container_width=True, icon=":material/add:",
-                                     help="Voeg een kostenregel toe zonder m² of lagen — "
-                                          "bijvoorbeeld steigerhuur"):
-                            st.session_state[f"mat_open_{_pid}"] = True
+                    st.markdown('<span class="pj-ond-add-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                    if st.button("Onderdeel toevoegen", key=f"ond_add_{_pid}"):
+                        # Centrale invoervalidatie (beta-blocker): blokkeer onrealistische /
+                        # ontbrekende invoer met duidelijke meldingen. Géén wijziging aan de
+                        # calculatielogica — alleen ongeldige invoer wordt tegengehouden.
+                        _ond_fout = eerste_validatiefout(
+                            valideer_tekst(ond_naam, "Naam onderdeel", min_len=2),
+                            valideer_getal(_save_m2, "m2", "Oppervlakte (m²)"),
+                            valideer_getal(_save_meters, "meters", "Lengte (m)"),
+                            valideer_getal(_save_lagen, "lagen", "Aantal lagen", toestaan_nul=False),
+                            valideer_getal(_save_hout_m2, "m2", "Houtwerk schilderoppervlak"),
+                            valideer_getal(ond_uren, "uren", "Arbeidsuren"),
+                        )
+                        if not _ond_fout and not ond_wz:
+                            _ond_fout = "Selecteer minimaal één werkzaamheid."
+                        if (not _ond_fout and float(_save_m2 or 0) <= 0 and float(_save_meters or 0) <= 0
+                                and float(_save_hout_m2 or 0) <= 0):
+                            _ond_fout = "Vul een oppervlakte (m²), lengte (m) óf houtwerk-hoeveelheid groter dan 0 in."
+                        if not _ond_fout:
+                            # Arbeidsuren-override: alleen vastleggen als de gebruiker de uren
+                            # daadwerkelijk afwijkt van de automatische berekening; anders None
+                            # (blijft automatisch meeberekenen). Houtwerk → effectief oppervlak + 2 lagen.
+                            _auto_final = round(auto_arbeidsuren(
+                                ond_wz,
+                                _save_hout_m2 if _show_houtwerk else _save_m2,
+                                _save_houtwerk_lagen if _show_houtwerk else _save_lagen,
+                                _save_meters,
+                                houtwerk_m2=(_save_hout_m2 if _show_houtwerk else _save_m2),
+                                houttype=(_save_houttype if _show_houtwerk else None),
+                                houttype_waarde=(_save_houttype_waarde if _show_houtwerk else 0)), 1)
+                            _uren_override = (float(ond_uren)
+                                              if abs(float(ond_uren) - _auto_final) > 1e-6
+                                              else None)
+                            st.session_state.projecten[project_idx]["onderdelen"].append({
+                                "naam": ond_naam, "m2": _save_m2, "lagen": int(_save_lagen),
+                                "meters": _save_meters,
+                                "werkzaamheden": ond_wz,
+                                "toeslag_hoogte": t_hoogte,
+                                "toeslag_spoed":  t_spoed,
+                                "toeslag_buiten": t_buiten,
+                                "toeslag_weekend": t_weekend,
+                                "toeslag_avond":   t_avond,
+                                "toeslag_winter":  t_winter,
+                                "arbeid_uren_override": _uren_override,
+                                # Houtwerk-type + hoeveelheid (alleen bij Houtwerk schilderen;
+                                # anders None/0). De engine rekent dit om naar schilderoppervlak.
+                                "houttype": _save_houttype,
+                                "houttype_waarde": _save_houttype_waarde,
+                                "houtwerk_lagen": _save_houtwerk_lagen,
+                            })
+                            # SP-008: offerte-inhoud gewijzigd → snapshot verversen
+                            verzeker_prijs_snapshot(st.session_state.projecten[project_idx])
+                            save_data()
+                            # Invoervelden leegmaken: oude keys opruimen + nonce verhogen
+                            # zodat de widgets met verse (lege) keys terugkomen.
+                            for _k in (_naam_key, _m2_key, _meters_key, _lagen_key, _wz_key,
+                                       _houttype_key, _houttype_waarde_key,
+                                       _th_key, _ts_key, _tb_key,
+                                       _twk_key, _tav_key, _twn_key,
+                                       _uren_key, _uren_touched_key):
+                                st.session_state.pop(_k, None)
+                            st.session_state[f"ond_nonce_{_pid}"] = _nonce + 1
+                            ui_alert("Onderdeel toegevoegd!")
                             st.rerun()
+                        else:
+                            ui_alert(_ond_fout, "error")
 
-                        if _mat_open:
-                            st.markdown('<div style="height:14px;"></div>', unsafe_allow_html=True)
-                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Omschrijving <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
-                            _mat_oms = st.text_input("Omschrijving", placeholder="Bijv: Rolsteiger huur",
-                                                     label_visibility="collapsed", key=_mat_oms_k)
-                            _mc1, _mc2 = st.columns(2)
-                            with _mc1:
-                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Bedrag (€)</div>', unsafe_allow_html=True)
-                                _mat_bed = st.number_input("Bedrag", min_value=0.0, step=10.0,
-                                                           format="%.2f", label_visibility="collapsed",
-                                                           key=_mat_bed_k,
-                                                           help="Excl. BTW. De marge komt hier bovenop.")
-                            with _mc2:
-                                st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Winstmarge (%)</div>', unsafe_allow_html=True)
-                                _mat_mrg = st.number_input("Winstmarge", min_value=0.0, max_value=100.0,
-                                                           step=1.0, format="%.0f",
-                                                           label_visibility="collapsed", key=_mat_mrg_k)
-                            # Live meekijken wat de klant betaalt — voorkomt verrassingen
-                            # bij het margepercentage.
-                            if float(_mat_bed or 0) > 0:
-                                st.markdown(
-                                    f'<div style="font-size:12px;color:#64748B;margin:6px 0 2px;">'
-                                    f'Regeltotaal: <strong style="color:#0F172A;">'
-                                    f'{format_eur(float(_mat_bed) * (1 + float(_mat_mrg or 0) / 100))}</strong>'
-                                    f'</div>', unsafe_allow_html=True)
-                            _mb1, _mb2 = st.columns([3, 1])
-                            with _mb1:
-                                st.markdown('<span class="pj-mat-ok-mk" style="display:none;"></span>',
-                                            unsafe_allow_html=True)
-                                if st.button("Toevoegen aan project", key=f"mat_ok_{_pid}",
-                                             use_container_width=True, icon=":material/check:"):
-                                    _mat_fout = eerste_validatiefout(
-                                        valideer_tekst(_mat_oms, "Omschrijving", min_len=2),
-                                        valideer_getal(_mat_bed, "prijs", "Bedrag", toestaan_nul=False),
-                                        valideer_getal(_mat_mrg, "procent", "Winstmarge"),
-                                    )
-                                    if _mat_fout:
-                                        ui_alert(_mat_fout, "error")
-                                    else:
-                                        _pr = st.session_state.projecten[project_idx]
-                                        _pr.setdefault("materieel", []).append({
-                                            "omschrijving": _mat_oms.strip(),
-                                            "bedrag": round(float(_mat_bed), 2),
-                                            "marge": float(_mat_mrg or 0),
-                                        })
-                                        # SP-008: offerte-inhoud gewijzigd → snapshot verversen,
-                                        # net als bij een onderdeel erbij/eraf.
-                                        verzeker_prijs_snapshot(_pr)
-                                        save_data()
-                                        st.session_state[f"mat_open_{_pid}"] = False
-                                        for _mk in (_mat_oms_k, _mat_bed_k, _mat_mrg_k):
-                                            st.session_state.pop(_mk, None)
-                                        st.session_state[f"mat_nonce_{_pid}"] = _mat_nonce + 1
-                                        ui_alert("Toegevoegd aan project!")
-                                        st.rerun()
-                            with _mb2:
-                                st.markdown('<span class="pj-mat-del-mk" style="display:none;"></span>',
-                                            unsafe_allow_html=True)
-                                if st.button("", key=f"mat_wis_{_pid}", use_container_width=True,
-                                             icon=":material/delete:", help="Regel wissen"):
+                # ── Materieel & Overig — losse kostenregels zonder m²/lagen ──
+                # Steiger, machinehuur, verschotten: wél kosten, geen oppervlak en
+                # geen lagen. Daarom een eigen, compacte invoer i.p.v. een onderdeel.
+                # Zelfde marker-klasse pj-ond-mk → gegarandeerd exact dezelfde
+                # kaartstyling als hiernaast; pj-mat-mk is alleen de layout-haak.
+                _mat_nonce = st.session_state.get(f"mat_nonce_{_pid}", 0)
+                _mat_sfx   = f"{_pid}_{_mat_nonce}"
+                _mat_oms_k, _mat_bed_k, _mat_mrg_k = (
+                    f"mat_oms_{_mat_sfx}", f"mat_bed_{_mat_sfx}", f"mat_mrg_{_mat_sfx}")
+                _mat_open = st.session_state.get(f"mat_open_{_pid}", False)
+                with _mat_col.container(border=True):
+                    st.markdown('<span class="pj-ond-mk pj-mat-mk" style="display:none;"></span>',
+                                unsafe_allow_html=True)
+                    st.markdown(
+                        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">'
+                        '<i class="bi bi-tools" style="font-size:20px;color:#2563EB;flex-shrink:0;"></i>'
+                        '<div style="font-size:14px;font-weight:700;color:#0F172A;">Materieel &amp; Overig</div>'
+                        '</div>',
+                        unsafe_allow_html=True)
+                    st.markdown('<span class="pj-mat-new-mk" style="display:none;"></span>',
+                                unsafe_allow_html=True)
+                    # Geen Streamlit icon= (Material Symbols): die rendert in deze app
+                    # als leeg wit blok. De '+' staat als gewone tekst in het label.
+                    if st.button("+  Toevoegen", key=f"mat_new_{_pid}", type="primary",
+                                 use_container_width=True,
+                                 help="Voeg een kostenregel toe zonder m² of lagen — "
+                                      "bijvoorbeeld steigerhuur"):
+                        st.session_state[f"mat_open_{_pid}"] = True
+                        st.rerun()
+
+                    if _mat_open:
+                        st.markdown('<div style="height:14px;"></div>', unsafe_allow_html=True)
+                        st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Omschrijving <span style="color:#F59E0B;font-weight:700;">*</span></div>', unsafe_allow_html=True)
+                        _mat_oms = st.text_input("Omschrijving", placeholder="Bijv: Rolsteiger huur",
+                                                 label_visibility="collapsed", key=_mat_oms_k)
+                        _mc1, _mc2 = st.columns(2)
+                        with _mc1:
+                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Bedrag (€)</div>', unsafe_allow_html=True)
+                            _mat_bed = st.number_input("Bedrag", min_value=0.0, step=10.0,
+                                                       format="%.2f", label_visibility="collapsed",
+                                                       key=_mat_bed_k,
+                                                       help="Excl. BTW. De marge komt hier bovenop.")
+                        with _mc2:
+                            st.markdown('<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;">Winstmarge (%)</div>', unsafe_allow_html=True)
+                            _mat_mrg = st.number_input("Winstmarge", min_value=0.0, max_value=100.0,
+                                                       step=1.0, format="%.0f",
+                                                       label_visibility="collapsed", key=_mat_mrg_k)
+                        # Live meekijken wat de klant betaalt — voorkomt verrassingen
+                        # bij het margepercentage.
+                        if float(_mat_bed or 0) > 0:
+                            st.markdown(
+                                f'<div style="font-size:12px;color:#64748B;margin:6px 0 2px;">'
+                                f'Regeltotaal: <strong style="color:#0F172A;">'
+                                f'{format_eur(float(_mat_bed) * (1 + float(_mat_mrg or 0) / 100))}</strong>'
+                                f'</div>', unsafe_allow_html=True)
+                        _mb1, _mb2 = st.columns([3, 1])
+                        with _mb1:
+                            st.markdown('<span class="pj-mat-ok-mk" style="display:none;"></span>',
+                                        unsafe_allow_html=True)
+                            if st.button("Toevoegen aan project", key=f"mat_ok_{_pid}",
+                                         use_container_width=True):
+                                _mat_fout = eerste_validatiefout(
+                                    valideer_tekst(_mat_oms, "Omschrijving", min_len=2),
+                                    valideer_getal(_mat_bed, "prijs", "Bedrag", toestaan_nul=False),
+                                    valideer_getal(_mat_mrg, "procent", "Winstmarge"),
+                                )
+                                if _mat_fout:
+                                    ui_alert(_mat_fout, "error")
+                                else:
+                                    _pr = st.session_state.projecten[project_idx]
+                                    _pr.setdefault("materieel", []).append({
+                                        "omschrijving": _mat_oms.strip(),
+                                        "bedrag": round(float(_mat_bed), 2),
+                                        "marge": float(_mat_mrg or 0),
+                                    })
+                                    # SP-008: offerte-inhoud gewijzigd → snapshot verversen,
+                                    # net als bij een onderdeel erbij/eraf.
+                                    verzeker_prijs_snapshot(_pr)
+                                    save_data()
                                     st.session_state[f"mat_open_{_pid}"] = False
                                     for _mk in (_mat_oms_k, _mat_bed_k, _mat_mrg_k):
                                         st.session_state.pop(_mk, None)
                                     st.session_state[f"mat_nonce_{_pid}"] = _mat_nonce + 1
+                                    ui_alert("Toegevoegd aan project!")
                                     st.rerun()
-                        else:
-                            _mat_n = len(project.get("materieel") or [])
-                            st.markdown(
-                                f'<div style="font-size:12.5px;color:#94A3B8;line-height:1.55;margin-top:14px;">'
-                                f'Voor kosten zonder oppervlak of lagen — steiger, machinehuur, '
-                                f'verschotten. Ze tellen mee in het projecttotaal en komen op de '
-                                f'offerte en factuur.'
-                                + (f'<br><span style="color:#475569;font-weight:600;">'
-                                   f'{_mat_n} regel{"s" if _mat_n != 1 else ""} toegevoegd</span>'
-                                   if _mat_n else '')
-                                + '</div>', unsafe_allow_html=True)
+                        with _mb2:
+                            st.markdown('<span class="pj-mat-del-mk" style="display:none;"></span>',
+                                        unsafe_allow_html=True)
+                            # Prullenbak via de app-conventie (Bootstrap ::before op de
+                            # marker pj-mat-del-mk), niet via Streamlit icon=.
+                            if st.button("", key=f"mat_wis_{_pid}", use_container_width=True,
+                                         help="Regel wissen"):
+                                st.session_state[f"mat_open_{_pid}"] = False
+                                for _mk in (_mat_oms_k, _mat_bed_k, _mat_mrg_k):
+                                    st.session_state.pop(_mk, None)
+                                st.session_state[f"mat_nonce_{_pid}"] = _mat_nonce + 1
+                                st.rerun()
+                    else:
+                        _mat_n = len(project.get("materieel") or [])
+                        st.markdown(
+                            f'<div style="font-size:12.5px;color:#94A3B8;line-height:1.55;margin-top:14px;">'
+                            f'Voor kosten zonder oppervlak of lagen — steiger, machinehuur, '
+                            f'verschotten. Ze tellen mee in het projecttotaal en komen op de '
+                            f'offerte en factuur.'
+                            + (f'<br><span style="color:#475569;font-weight:600;">'
+                               f'{_mat_n} regel{"s" if _mat_n != 1 else ""} toegevoegd</span>'
+                               if _mat_n else '')
+                            + '</div>', unsafe_allow_html=True)
 
                 st.markdown('<span class="pj-terug-mk" style="display:none;"></span>', unsafe_allow_html=True)
                 if st.button("← Terug naar overzicht", key="pj_terug"):
