@@ -444,11 +444,20 @@ def _inject_login_css():
     .stApp { background:#EEF2F7; }
     #MainMenu, header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] { display:none !important; }
     /* Cookie-controller = transport-only component. Het iframe laadt een paar seconden en gaf
-       zolang een witte balk bovenaan de inlogpagina. Onzichtbaar houden (0px, geen ruimte);
-       display:none/height:0 breekt de cookie NIET — het iframe draait gewoon door. */
+       zolang een witte balk bovenaan de inlogpagina — die bleef in 1.59 knipperen omdat de
+       OMRINGENDE container (stElementContainer) ruimte hield terwijl alleen het component zelf
+       werd verborgen. Nu ook de container + zijn marge/padding weg, case-insensitive. Bewust
+       NIET de brede [data-testid="stIFrame"]: dat is óók het transport voor de sidebar-nav en
+       de CSS/JS-injectie; die mogen op geen enkel moment geraakt worden. Deze regel is
+       login-only (verdwijnt na inloggen) en raakt daarom nooit het dashboard.
+       display:none/height:0 breekt de cookie NIET — het component draait gewoon door. */
     [data-testid="stCustomComponentV1"], [data-testid="stCustomComponent"],
-    iframe[title*="cookie"], [data-testid="stElementContainer"]:has(> iframe[title*="cookie"]) {
-        display:none !important; height:0 !important; width:0 !important; }
+    [data-testid="stElementContainer"]:has(> [data-testid="stCustomComponentV1"]),
+    [data-testid="stElementContainer"]:has(> [data-testid="stCustomComponent"]),
+    iframe[title*="cookie" i],
+    [data-testid="stElementContainer"]:has(iframe[title*="cookie" i]) {
+        display:none !important; height:0 !important; width:0 !important;
+        margin:0 !important; padding:0 !important; border:0 !important; }
     .stApp [data-testid="stMainBlockContainer"], .stApp .block-container { padding:0 !important; max-width:100% !important; }
     /* Login exact viewport-hoog → geen (over)scroll, dus geen witte rand bovenaan.
        Navy html/body-achtergrond als vangnet zodat er nooit wit doorschemert.
