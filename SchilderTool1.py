@@ -6299,6 +6299,27 @@ elif selected == "Projecten":
     .pd-totaal-lbl{font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:0.07em;}
     .pd-totaal-val{font-size:28px;font-weight:800;color:#0F172A;font-family:'DM Mono',monospace;letter-spacing:-0.8px;line-height:1.1;}
     .pd-totaal-sub{font-size:11.5px;color:#94A3B8;margin-top:3px;}
+    /* ── Totaalkaart + Kosten breakdown = ÉÉN kaart ──────────────────────────────
+       Gescoped op de wrapper-container met marker pd-totblok-mk, zodat alleen dit
+       blok wordt geraakt (de Calculaties-pagina en andere kaarten blijven intact). */
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] span.pd-totblok-mk){gap:0 !important;}
+    /* Totaalkaart met breakdown eronder: platte onderkant → de breakdown sluit strak aan. */
+    .pd-card-tot-open{margin-bottom:0 !important;border-bottom-left-radius:0 !important;border-bottom-right-radius:0 !important;border-bottom:none !important;}
+    /* De markdown-container van de kaart heeft een -16px ondermarge (normaal opgeheven
+       door de 16px vertical-gap). Met gap:0 zou die -16px de expander 16px omhoog trekken
+       → overlap. Voor déze kaart de marge op 0 zetten zodat de container 'm precies omvat. */
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] span.pd-totblok-mk) [data-testid="stMarkdownContainer"]:has(> .pd-card-tot-open){margin-bottom:0 !important;}
+    /* De expander wordt visueel de onderkant van dezelfde kaart. */
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] span.pd-totblok-mk) [data-testid="stExpander"]{margin-top:0 !important;}
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] span.pd-totblok-mk) [data-testid="stExpander"] details{
+        border:1px solid #E8EFF5 !important;border-top:none !important;border-radius:0 0 18px 18px !important;
+        background:#FFFFFF !important;box-shadow:0 1px 4px rgba(0,0,0,0.05) !important;overflow:hidden !important;}
+    /* 'Kosten breakdown analyse'-kop: scheidingslijn erboven, zelfde horizontale padding als de kaart. */
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] span.pd-totblok-mk) [data-testid="stExpander"] summary{
+        border-top:1px solid #F1F5F9 !important;padding:12px 28px !important;border-radius:0 !important;}
+    /* Binnenste breakdown-kaart afvlakken: het is nu CONTENT van de kaart, geen losse card meer. */
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] span.pd-totblok-mk) .calc-breakdown-card{
+        border:none !important;border-radius:0 !important;box-shadow:none !important;margin-top:0 !important;}
     /* Acties kaart: witte achtergrond */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk){background:#FFFFFF !important;border:1px solid #E8EFF5 !important;border-radius:18px !important;box-shadow:0 1px 4px rgba(0,0,0,0.05) !important;}
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stVerticalBlock"]{background:#FFFFFF !important;gap:4px !important;}
@@ -7088,30 +7109,39 @@ p._matLp={down:down,cancel:cancel,move:move,st:st};
                             f'<div style="font-size:11.5px;color:#D97706;margin-top:8px;text-align:right;">'
                             f'<i class="bi bi-exclamation-triangle" style="margin-right:4px;"></i>'
                             f'Onder de minimale projectprijs van {format_eur(_min_prijs)}</div>')
-                    st.markdown(
-                        f'<div class="pd-card" style="padding:18px 28px;">'
-                        f'<div style="display:flex;align-items:center;justify-content:space-between;gap:20px;">'
-                        f'<span style="font-size:13px;font-weight:600;color:#64748B;">Totaal excl. BTW</span>'
-                        f'<div style="text-align:right;">'
-                        f'<div class="pd-totaal-val">{format_eur(totaal["excl_btw"])}</div>'
-                        f'<div style="font-size:12px;color:#94A3B8;margin-top:5px;">'
-                        f'BTW ({btw}%): <strong style="color:#475569;">{format_eur(totaal["btw_bedrag"])}</strong>'
-                        f'&nbsp;&nbsp;'
-                        f'<span style="color:#0F172A;font-weight:700;">Incl. BTW: {format_eur(totaal["incl_btw"])}</span>'
-                        f'</div>'
-                        f'{_min_warn}'
-                        f'</div>'
-                        f'</div>'
-                        f'</div>',
-                        unsafe_allow_html=True)
+                    # Totaalkaart + breakdown vormen ÉÉN kaart: samen in één container met
+                    # marker pd-totblok-mk. De CSS (gescoped op die marker) zet de gap op 0,
+                    # geeft de totaalkaart een platte onderkant en plakt de uitklapbare
+                    # breakdown er naadloos tegenaan. Alleen als er onderdelen zijn krijgt de
+                    # kaart een breakdown; anders blijft 'ie een gewone (rondom afgeronde) kaart.
+                    _heeft_bd = bool(project.get("onderdelen"))
+                    _tot_cls = "pd-card pd-card-tot" + (" pd-card-tot-open" if _heeft_bd else "")
+                    with st.container():
+                        st.markdown('<span class="pd-totblok-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div class="{_tot_cls}" style="padding:18px 28px;">'
+                            f'<div style="display:flex;align-items:center;justify-content:space-between;gap:20px;">'
+                            f'<span style="font-size:13px;font-weight:600;color:#64748B;">Totaal excl. BTW</span>'
+                            f'<div style="text-align:right;">'
+                            f'<div class="pd-totaal-val">{format_eur(totaal["excl_btw"])}</div>'
+                            f'<div style="font-size:12px;color:#94A3B8;margin-top:5px;">'
+                            f'BTW ({btw}%): <strong style="color:#475569;">{format_eur(totaal["btw_bedrag"])}</strong>'
+                            f'&nbsp;&nbsp;'
+                            f'<span style="color:#0F172A;font-weight:700;">Incl. BTW: {format_eur(totaal["incl_btw"])}</span>'
+                            f'</div>'
+                            f'{_min_warn}'
+                            f'</div>'
+                            f'</div>'
+                            f'</div>',
+                            unsafe_allow_html=True)
 
-                    # ── Kosten breakdown analyse ──
-                    # Zelfde analyse als op de Calculaties-pagina (render_kosten_breakdown),
-                    # gevoed met het snapshot-bewuste projecttotaal zodat de bedragen exact
-                    # overeenkomen met "Totaal excl. BTW" hierboven. Standaard ingeklapt.
-                    if project.get("onderdelen"):
-                        with st.expander("Kosten breakdown analyse", expanded=False):
-                            render_kosten_breakdown(totaal, marge, btw)
+                        # ── Kosten breakdown analyse — uitklapbaar onderdeel van dezelfde kaart ──
+                        # Zelfde analyse als op de Calculaties-pagina (render_kosten_breakdown),
+                        # gevoed met het snapshot-bewuste projecttotaal zodat de bedragen exact
+                        # overeenkomen met "Totaal excl. BTW" hierboven. Standaard ingeklapt.
+                        if _heeft_bd:
+                            with st.expander("Kosten breakdown analyse", expanded=False):
+                                render_kosten_breakdown(totaal, marge, btw)
 
                 # ── Onderdeel toevoegen — zelfde dynamische 3-koloms workflow als de Calculatiepagina:
                 #    LINKS "wat & wie?"  → naam · werkzaamheden · arbeidsuren
