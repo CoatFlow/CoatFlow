@@ -4615,6 +4615,11 @@ _css_json = json.dumps(_APP_CSS)
 st.html("""<style>
 /* stHtml-containers dragen alleen CSS → mogen geen enkele ruimte innemen (ook deze niet). */
 [data-testid="stElementContainer"]:has(> [data-testid="stHtml"]){display:none !important;}
+/* Streamlit-header/toolbar SYNCHROON verbergen — net als de login-CSS. Stond dit alleen
+   in de async basis-CSS (via component-iframe), dan flitste de header ná het inloggen als
+   lege ruimte bovenaan tot die CSS laadde: de login-CSS die 'm daarvoor synchroon verborg
+   is dan al weg. Hier verdwijnt hij direct, zodat de bovenruimte meteen klopt. */
+#MainMenu, header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"]{display:none !important;}
 /* Bovenruimte pagina's: de Streamlit-header is verborgen, dus 6rem is pure lege ruimte. */
 [data-testid="stMainBlockContainer"], .block-container{padding-top:3rem !important;}
 </style>""")
