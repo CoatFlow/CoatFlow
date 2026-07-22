@@ -8989,8 +8989,8 @@ elif selected == "Producten":
     div[data-testid="stHorizontalBlock"]:has(span.pr-ovl-mk) [data-testid="stButton"]{width:100% !important;}
     div[data-testid="stHorizontalBlock"]:has(span.pr-ovl-mk) button{opacity:0 !important;width:100% !important;height:62px !important;cursor:pointer !important;pointer-events:auto !important;background:transparent !important;border:none !important;box-shadow:none !important;margin:0 !important;padding:0 !important;transform:none !important;}
     /* Bewerk/verwijder-klikzones absoluut vast vanaf de rechterrand → vallen exact over de (rechts uitgelijnde) iconen op elke schermbreedte */
-    div[data-testid="stHorizontalBlock"]:has(span.pr-ovl-mk) > div[data-testid="stColumn"]:nth-child(3){position:absolute !important;top:0 !important;right:53px !important;width:34px !important;min-width:34px !important;}
-    div[data-testid="stHorizontalBlock"]:has(span.pr-ovl-mk) > div[data-testid="stColumn"]:nth-child(4){position:absolute !important;top:0 !important;right:15px !important;width:34px !important;min-width:34px !important;}
+    div[data-testid="stHorizontalBlock"]:has(span.pr-ovl-mk) > div[data-testid="stColumn"]:nth-child(3){position:absolute !important;top:0 !important;right:87px !important;width:34px !important;min-width:34px !important;}
+    div[data-testid="stHorizontalBlock"]:has(span.pr-ovl-mk) > div[data-testid="stColumn"]:nth-child(4){position:absolute !important;top:0 !important;right:49px !important;width:34px !important;min-width:34px !important;}
     [data-testid="stForm"]:has(span.pr-inline-edit-mk){background:#FFFFFF !important;border:1px solid #BFDBFE !important;border-radius:14px !important;box-shadow:0 2px 8px rgba(37,99,235,0.07) !important;}
     [data-testid="stForm"]:has(span.pr-inline-edit-mk) [data-testid="stVerticalBlock"],[data-testid="stForm"]:has(span.pr-inline-edit-mk) [data-testid="stHorizontalBlock"],[data-testid="stForm"]:has(span.pr-inline-edit-mk) [data-testid="stMarkdownContainer"],[data-testid="stForm"]:has(span.pr-inline-edit-mk) [data-testid="stColumn"]{background:#FFFFFF !important;}
     [data-testid="stForm"]:has(span.pr-inline-edit-mk) button [data-testid="stMarkdownContainer"]{background:transparent !important;}
@@ -9177,7 +9177,7 @@ elif selected == "Producten":
                     f'<div style="flex:1.0;font-size:14px;color:#374151;padding-right:12px;">{product["verbruik"]:.3f} /{h(product.get("verbruik_eenheid", "m²"))}</div>'
                     f'<div style="flex:0.95;font-size:14px;color:#374151;padding-right:12px;">{product.get("inhoud", 0):g} {h(product.get("inhoud_eenheid", ""))}</div>'
                     f'<div style="flex:1.0;padding-right:12px;">{_pr_badge}</div>'
-                    f'<div style="flex:0.95;display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;">'
+                    f'<div style="flex:0.95;display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;padding-right:34px;">'
                     f'<div style="{_IBTN}" title="Bewerken"><i class="bi bi-pencil" style="font-size:13px;color:#CBD5E1;"></i></div>'
                     f'<div style="{_IBTN}" title="Verwijderen"><i class="bi bi-trash3" style="font-size:13px;color:#CBD5E1;"></i></div>'
                     f'</div></div>',
@@ -9936,7 +9936,7 @@ elif selected == "Personeel":
                   </div>
                   <div style="flex:1.4;font-size:14px;color:#374151;padding-right:12px;">{h(mw.get('functie','—'))}</div>
                   <div style="flex:1.4;font-size:14px;color:#0F172A;font-weight:500;font-family:'DM Mono',monospace;padding-right:12px;">€ {mw['uurtarief']:.2f}/uur</div>
-                  <div style="flex:1.4;font-size:14px;color:#374151;padding-right:12px;">{h(tel_str)}</div>
+                  <div style="flex:1.4;font-size:14px;color:#2563EB;font-family:'DM Mono',monospace;padding-right:12px;">{h(tel_str)}</div>
                   <div style="flex:1.1;padding-right:12px;">{badge}</div>
                   <div style="flex:1.0;display:inline-flex;align-items:center;gap:6px;">
                     <div style="{EDIT_BTN}" title="Medewerker bewerken"><i class="bi bi-pencil" style="font-size:13px;color:#CBD5E1;"></i></div>
