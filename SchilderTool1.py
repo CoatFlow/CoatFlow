@@ -211,6 +211,36 @@ def verbruik_eenheid_van(product):
     """'meter' voor kit/afplakwerk, anders 'm²'."""
     return "meter" if is_meter_product(product) else "m²"
 
+# Realistisch gemiddeld verbruik per producttype (Nederlandse schildersgemiddelden).
+# Naam-sleutels (specifiek → generiek); de eerste match wint. Muurverf ~8 m²/liter → 0,12
+# l/m²; houtverf/lak dekken verder → lager; kit/afplak zijn per strekkende meter.
+_VERBRUIK_NAAM = [
+    (("schuurpapier", "schuurvel", "schuurblok", "schuurgaas", "schuurspons", "schuur"), 0.50),
+    (("afplaktape", "afplakband", "schilderstape", "afplak", "maskeer", "tape"),          0.20),
+    (("siliconenkit", "acrylaatkit", "montagekit", "kit", "siliconen", "silicone", "sealant"), 0.05),
+    (("behanglijm", "behangplaksel", "behang"),                                            0.15),
+    (("grondverf", "primer", "voorstrijk", "isoleerprimer", "hechtprimer", "grondlaag", "grondering"), 0.10),
+    (("hoogglans", "zijdeglans", "lakverf", "houtlak", "aflak", "grondlak", "pu-lak"),      0.08),
+    (("houtverf", "beits", "houtbeits", "buitenverf", "traplak"),                           0.09),
+    (("muurverf", "latex", "muur", "sausverf", "wandverf", "plafondverf", "plafond", "spachtel"), 0.12),
+    (("verf", "coating", "lak"),                                                            0.11),
+]
+_VERBRUIK_CATEGORIE = {
+    "Verf": 0.12, "Primer": 0.10, "Kit": 0.05, "Afplakken": 0.20,
+    "Schuurpapier": 0.50, "Behang": 0.15, "Gereedschap": 0.10, "Overig": 0.10,
+}
+
+def herken_verbruik(naam, categorie="Verf"):
+    """Realistisch gemiddeld verbruik (eenheid per m² of per strekkende meter) afgeleid uit
+    de PRODUCTNAAM, met de categorie als terugval. Alleen bedoeld als slimme DEFAULT in het
+    nieuw-productformulier — de gebruiker kan de waarde altijd zelf overschrijven."""
+    n = (naam or "").lower()
+    for _sleutels, _v in _VERBRUIK_NAAM:
+        if any(_s in n for _s in _sleutels):
+            return _v
+    return _VERBRUIK_CATEGORIE.get(categorie, 0.10)
+
+
 def onderdeel_is_meterwerk(ond):
     """True als álle werkzaamheden van dit onderdeel meterwerk zijn (kit/afplak),
     zodat de offerte dit onderdeel in strekkende meters i.p.v. m² toont (punt 12)."""
@@ -9348,9 +9378,10 @@ elif selected == "Producten":
                 st.session_state.pop(_k, None)
 
         # Standaardwaarden voor de keyed form-velden (eenmalig), zodat de
-        # URL-import ze vóór het renderen kan overschrijven.
-        for _k, _v in {"pn_naam": "", "pn_prijs": 20.0, "pn_verbruik": 0.10, "pn_inhoud": 10.0,
-                       "pn_eenheid": "liter", "pn_inhoud_eenheid": "liter",
+        # URL-import ze vóór het renderen kan overschrijven. Het verbruik krijgt meteen
+        # een realistisch gemiddelde (herken_verbruik) i.p.v. een vaste 0,100.
+        for _k, _v in {"pn_naam": "", "pn_prijs": 20.0, "pn_verbruik": herken_verbruik("", "Verf"),
+                       "pn_inhoud": 10.0, "pn_eenheid": "liter", "pn_inhoud_eenheid": "liter",
                        "pn_categorie": "Verf", "pn_werkzaamheden": []}.items():
             st.session_state.setdefault(_k, _v)
 
@@ -9586,9 +9617,17 @@ elif selected == "Producten":
             if _opslaan:
                 if p_naam and p_werkzaamheden and p_inhoud > 0:
                     nieuw_id = max((p["id"] for p in st.session_state.producten), default=0) + 1
+                    # Slim verbruik: een st.form kan het veld niet live bijwerken terwijl je
+                    # typt, dus verfijnen we bij het opslaan. Liet de gebruiker het veld op de
+                    # begin-default staan, dan zetten we het gemiddelde dat bij de PRODUCTNAAM
+                    # hoort (herken_verbruik). Paste 'ie het veld zelf aan, dan blijft zijn
+                    # waarde staan.
+                    _verbruik = p_verbruik
+                    if abs(float(p_verbruik) - herken_verbruik("", "Verf")) < 1e-9:
+                        _verbruik = herken_verbruik(p_naam, p_categorie)
                     _nieuw_prod = {
                         "id": nieuw_id, "naam": p_naam, "prijs": p_prijs,
-                        "verbruik": p_verbruik, "eenheid": p_eenheid,
+                        "verbruik": _verbruik, "eenheid": p_eenheid,
                         "categorie": p_categorie, "werkzaamheden": p_werkzaamheden,
                         "inhoud": p_inhoud,
                         # Projectkoppeling: None = globaal (alle projecten), anders alleen dit project.
@@ -10486,10 +10525,10 @@ elif selected == "Instellingen":
                 _sec("#EFF6FF", "building", "Bedrijfsinformatie", "Naam, logo, accentkleur en identiteit")
                 bi1, bi2 = st.columns(2)
                 with bi1:
-                    inst["bedrijfsnaam"]   = st.text_input("Bedrijfsnaam *", value=inst["bedrijfsnaam"], placeholder="Bijv. SchilderPro BV")
+                    inst["bedrijfsnaam"]   = st.text_input("Bedrijfsnaam :orange[\\*]", value=inst["bedrijfsnaam"], placeholder="Bijv. SchilderPro BV")
                     inst["contactpersoon"] = st.text_input("Contactpersoon", value=inst.get("contactpersoon",""), placeholder="Bijv. Jan de Vries")
-                    inst["kvk"]            = st.text_input("KVK-nummer", value=inst.get("kvk",""), placeholder="12345678")
-                    inst["btw_nummer"]     = st.text_input("BTW-nummer", value=inst["btw_nummer"], placeholder="NL999888777B01")
+                    inst["kvk"]            = st.text_input("KVK-nummer :orange[\\*]", value=inst.get("kvk",""), placeholder="12345678")
+                    inst["btw_nummer"]     = st.text_input("BTW-nummer :orange[\\*]", value=inst["btw_nummer"], placeholder="NL999888777B01")
                 with bi2:
                     inst["bedrijfskleur"] = st.color_picker("Bedrijfskleur / accentkleur", value=inst.get("bedrijfskleur","#2563EB"))
                     _logo_up = st.file_uploader("Bedrijfslogo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo_upload")
@@ -10503,12 +10542,12 @@ elif selected == "Instellingen":
             with st.container(border=True):
                 inst_card_marker()
                 _sec("#F0FDF4", "geo-alt", "Adresgegevens", "Vestigingsadres van het bedrijf")
-                inst["adres"] = st.text_input("Adres", value=inst["adres"], placeholder="Straat + huisnummer")
+                inst["adres"] = st.text_input("Adres :orange[\\*]", value=inst["adres"], placeholder="Straat + huisnummer")
                 _adr1, _adr2 = st.columns(2)
                 with _adr1:
-                    inst["postcode"] = st.text_input("Postcode", value=inst.get("postcode",""), placeholder="5000 AA")
+                    inst["postcode"] = st.text_input("Postcode :orange[\\*]", value=inst.get("postcode",""), placeholder="5000 AA")
                 with _adr2:
-                    inst["plaats"] = st.text_input("Plaats", value=inst.get("plaats",""), placeholder="Tilburg")
+                    inst["plaats"] = st.text_input("Plaats :orange[\\*]", value=inst.get("plaats",""), placeholder="Tilburg")
 
             # Sectie: Contact
             with st.container(border=True):
@@ -10516,10 +10555,10 @@ elif selected == "Instellingen":
                 _sec("#FFFBEB", "telephone", "Contact", "Telefoon, e-mail en website")
                 _ct1, _ct2 = st.columns(2)
                 with _ct1:
-                    inst["telefoon"] = st.text_input("Telefoon", value=inst["telefoon"], placeholder="013-1234567")
+                    inst["telefoon"] = st.text_input("Telefoon :orange[\\*]", value=inst["telefoon"], placeholder="013-1234567")
                     inst["mobiel"]   = st.text_input("Mobiel", value=inst.get("mobiel",""), placeholder="06-12345678")
                 with _ct2:
-                    inst["email"]   = st.text_input("Algemeen e-mailadres", value=inst["email"], placeholder="info@bedrijf.nl")
+                    inst["email"]   = st.text_input("Algemeen e-mailadres :orange[\\*]", value=inst["email"], placeholder="info@bedrijf.nl")
                     inst["website"] = st.text_input("Website", value=inst.get("website",""), placeholder="www.bedrijf.nl")
 
             # Sectie: E-mailadressen
@@ -10538,7 +10577,7 @@ elif selected == "Instellingen":
             with st.container(border=True):
                 inst_card_marker()
                 _sec("#FEF3C7", "bank2", "Bankgegevens", "IBAN voor betalingen op offertes en facturen")
-                inst["iban"] = st.text_input("IBAN", value=inst["iban"], placeholder="NL12 ABCD 0123 4567 89")
+                inst["iban"] = st.text_input("IBAN :orange[\\*]", value=inst["iban"], placeholder="NL12 ABCD 0123 4567 89")
 
             # Sectie: Online aanwezigheid
             with st.container(border=True):
