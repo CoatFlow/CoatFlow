@@ -5536,6 +5536,52 @@ if selected == "Dashboard":
     .db-trend-badge { display:inline-flex; align-items:center; gap:3px; padding:2px 7px; border-radius:99px; font-size:10.5px; font-weight:700; }
     .db-trend-up   { background:#DCFCE7; color:#166534; }
     .db-trend-down { background:#FEE2E2; color:#991B1B; }
+
+    /* ── Onboarding-kaart (alleen nieuwe gebruikers) — premium CoatFlow-stijl ── */
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk){
+        background:linear-gradient(180deg,#F8FBFF 0%,#FFFFFF 55%) !important;
+        border:1px solid #E2E8F0 !important; border-radius:18px !important;
+        box-shadow:0 2px 12px rgba(37,99,235,0.06) !important; padding:22px 26px !important;
+        position:relative !important;
+    }
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk) [data-testid="stVerticalBlock"]{gap:2px !important;}
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk) [data-testid="stMarkdownContainer"]{background:transparent !important;}
+    /* 'Niet meer tonen'-knop: absoluut in de rechterbovenhoek van de kaart */
+    [data-testid="stElementContainer"]:has(span.cf-onb-x-mk){display:none !important;}
+    [data-testid="stElementContainer"]:has(span.cf-onb-x-mk) + [data-testid="stElementContainer"]{
+        position:absolute !important; top:18px !important; right:22px !important; z-index:5 !important;
+        width:auto !important; margin:0 !important;
+    }
+    [data-testid="stElementContainer"]:has(span.cf-onb-x-mk) + [data-testid="stElementContainer"] [data-testid="stButton"]{width:auto !important;}
+    [data-testid="stElementContainer"]:has(span.cf-onb-x-mk) + [data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]{
+        background:#FFFFFF !important; border:1px solid #E2E8F0 !important; color:#94A3B8 !important;
+        border-radius:8px !important; font-size:12px !important; font-weight:600 !important;
+        padding:3px 12px !important; box-shadow:none !important; min-height:0 !important; width:auto !important;
+    }
+    [data-testid="stElementContainer"]:has(span.cf-onb-x-mk) + [data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"]:hover{
+        background:#FEF2F2 !important; color:#DC2626 !important; border-color:#FCA5A5 !important;
+    }
+    .cf-onb-titel{font-size:19px;font-weight:800;color:#0F172A;letter-spacing:-0.3px;line-height:1.2;}
+    .cf-onb-sub{font-size:13px;color:#64748B;margin-top:4px;line-height:1.5;}
+    .cf-onb-steps{display:flex;align-items:stretch;gap:0;margin-top:20px;}
+    .cf-onb-step{flex:1 1 0;display:flex;flex-direction:column;gap:9px;padding:0 18px;min-width:0;}
+    .cf-onb-step:first-child{padding-left:2px;}
+    .cf-onb-num{width:30px;height:30px;border-radius:50%;background:#2563EB;color:#FFFFFF;
+        display:inline-flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;
+        box-shadow:0 2px 6px rgba(37,99,235,0.30);flex:0 0 auto;}
+    .cf-onb-step-t{font-size:13.5px;font-weight:700;color:#0F172A;}
+    .cf-onb-step-d{font-size:12px;color:#64748B;line-height:1.55;}
+    .cf-onb-path{display:inline-block;background:#EFF6FF;color:#2563EB;font-weight:600;
+        font-size:11px;padding:1px 7px;border-radius:6px;margin:3px 3px 0 0;white-space:nowrap;}
+    .cf-onb-arrow{display:flex;align-items:center;justify-content:center;color:#CBD5E1;
+        font-size:17px;flex:0 0 auto;padding-top:4px;}
+    /* Responsive: stappen onder elkaar, pijlen wijzen naar beneden */
+    @media (max-width:820px){
+        .cf-onb-steps{flex-direction:column;gap:16px;}
+        .cf-onb-step{padding:0 !important;}
+        .cf-onb-step:first-child{padding-left:0 !important;}
+        .cf-onb-arrow{transform:rotate(90deg);padding:0;justify-content:flex-start;padding-left:12px;}
+    }
     """)
 
     # ── Header ──
@@ -5561,6 +5607,50 @@ if selected == "Dashboard":
         """, unsafe_allow_html=True)
 
     st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+
+    # ── Onboarding-kaart: alleen voor nieuwe gebruikers, tot 'Niet meer tonen' ──
+    # De voorkeur ligt in instellingen (jsonb, per bedrijf) → permanent bewaard in de
+    # database, dus verborgen na refresh/uitloggen/opnieuw inloggen/ander apparaat.
+    if not st.session_state.instellingen.get("onboarding_verborgen", False):
+        _onb_stappen = [
+            ("1", "🏢 Bedrijfsgegevens &amp; Template",
+             'Vul je bedrijfsgegevens in via <span class="cf-onb-path">Instellingen → Bedrijfsgegevens</span> '
+             'en upload je eigen Word-template via <span class="cf-onb-path">Offertes &amp; Facturen</span>.'),
+            ("2", "👤 Klant &amp; Project aanmaken",
+             'Voeg eerst een klant toe via <span class="cf-onb-path">Klanten → Nieuwe klant</span> '
+             'en maak daarna een project via <span class="cf-onb-path">Projecten → Nieuw project</span>.'),
+            ("3", "📦 Producten &amp; Onderdelen",
+             'Voeg je materialen toe via <span class="cf-onb-path">Producten → Nieuw product</span> '
+             'en voeg de ruimtes/onderdelen toe via <span class="cf-onb-path">Projecten → Bekijken</span>.'),
+            ("4", "📄 PDF genereren",
+             'Klik op <span class="cf-onb-path">PDF genereren</span> en kies <strong>Offerte</strong> '
+             'of <strong>Factuur</strong> om direct een professioneel document te downloaden.'),
+        ]
+        _onb_html = ""
+        for _si, (_num, _titel, _desc) in enumerate(_onb_stappen):
+            _onb_html += (f'<div class="cf-onb-step"><div class="cf-onb-num">{_num}</div>'
+                          f'<div class="cf-onb-step-t">{_titel}</div>'
+                          f'<div class="cf-onb-step-d">{_desc}</div></div>')
+            if _si < len(_onb_stappen) - 1:
+                _onb_html += '<div class="cf-onb-arrow"><i class="bi bi-arrow-right"></i></div>'
+
+        with st.container(border=True):
+            st.markdown('<span class="cf-onb-mk" style="display:none;"></span>', unsafe_allow_html=True)
+            # 'Niet meer tonen' — absoluut rechtsboven in de kaart (marker + volgende knop).
+            st.markdown('<span class="cf-onb-x-mk" style="display:none;"></span>', unsafe_allow_html=True)
+            if st.button("✕  Niet meer tonen", key="cf_onb_dismiss",
+                         help="Verberg deze uitleg permanent (ook na uitloggen)."):
+                st.session_state.instellingen["onboarding_verborgen"] = True
+                save_data()
+                st.rerun()
+            st.markdown(
+                '<div class="cf-onb-titel">Welkom bij CoatFlow 👋</div>'
+                '<div class="cf-onb-sub">Volg onderstaande stappen om binnen enkele minuten '
+                'je eerste offerte of factuur te maken.</div>',
+                unsafe_allow_html=True)
+            st.markdown(f'<div class="cf-onb-steps">{_onb_html}</div>', unsafe_allow_html=True)
+
+        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
     # ── Statistiek cards — omzet dynamisch uit echte projectdata (SP-010) ──
     OMZET_STATUSSEN = ("Geaccepteerd", "In uitvoering", "Afgerond")

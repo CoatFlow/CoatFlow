@@ -88,6 +88,10 @@ STANDAARD_INSTELLINGEN = {
     "std_sorteervolgorde": "Nieuwste eerst",
     "dashboard_filter": "Alle projecten", "dashboard_periode": "Huidige maand",
     "compacte_weergave": False,
+    # Onboarding: True zodra de gebruiker 'Niet meer tonen' klikt. Ligt in instellingen
+    # (jsonb, per bedrijf) → permanent bewaard, overleeft refresh/uitloggen/ander apparaat,
+    # zonder extra kolom of migratie.
+    "onboarding_verborgen": False,
 }
 
 
