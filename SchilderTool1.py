@@ -5545,6 +5545,8 @@ if selected == "Dashboard":
         position:relative !important;
     }
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk) [data-testid="stVerticalBlock"]{gap:2px !important;}
+    /* Binnenste container-rand van st.container(border=True) weg (zat op de inner stVerticalBlock) */
+    [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk) > [data-testid="stVerticalBlock"]{border:none !important;}
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk) [data-testid="stMarkdownContainer"]{background:transparent !important;}
     /* 'Niet meer tonen'-knop: absoluut in de rechterbovenhoek van de kaart */
     [data-testid="stElementContainer"]:has(span.cf-onb-x-mk){display:none !important;}
