@@ -5540,8 +5540,8 @@ if selected == "Dashboard":
     /* ── Onboarding-kaart (alleen nieuwe gebruikers) — premium CoatFlow-stijl ── */
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk){
         background:linear-gradient(180deg,#F8FBFF 0%,#FFFFFF 55%) !important;
-        border:1px solid #E2E8F0 !important; border-radius:18px !important;
-        box-shadow:0 2px 12px rgba(37,99,235,0.06) !important; padding:22px 26px !important;
+        border:none !important; border-radius:18px !important;
+        box-shadow:0 4px 18px rgba(37,99,235,0.08) !important; padding:22px 26px !important;
         position:relative !important;
     }
     [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] span.cf-onb-mk) [data-testid="stVerticalBlock"]{gap:2px !important;}
@@ -5570,6 +5570,7 @@ if selected == "Dashboard":
         display:inline-flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;
         box-shadow:0 2px 6px rgba(37,99,235,0.30);flex:0 0 auto;}
     .cf-onb-step-t{font-size:13.5px;font-weight:700;color:#0F172A;}
+    .cf-onb-step-ic{color:#2563EB;margin-right:7px;font-size:13px;vertical-align:baseline;}
     .cf-onb-step-d{font-size:12px;color:#64748B;line-height:1.55;}
     .cf-onb-path{display:inline-block;background:#EFF6FF;color:#2563EB;font-weight:600;
         font-size:11px;padding:1px 7px;border-radius:6px;margin:3px 3px 0 0;white-space:nowrap;}
@@ -5613,16 +5614,16 @@ if selected == "Dashboard":
     # database, dus verborgen na refresh/uitloggen/opnieuw inloggen/ander apparaat.
     if not st.session_state.instellingen.get("onboarding_verborgen", False):
         _onb_stappen = [
-            ("1", "🏢 Bedrijfsgegevens &amp; Template",
+            ("1", '<span class="cf-onb-step-ic"><i class="bi bi-building"></i></span>Bedrijfsgegevens &amp; Template',
              'Vul je bedrijfsgegevens in via <span class="cf-onb-path">Instellingen → Bedrijfsgegevens</span> '
              'en upload je eigen Word-template via <span class="cf-onb-path">Offertes &amp; Facturen</span>.'),
-            ("2", "👤 Klant &amp; Project aanmaken",
+            ("2", '<span class="cf-onb-step-ic"><i class="bi bi-person"></i></span>Klant &amp; Project aanmaken',
              'Voeg eerst een klant toe via <span class="cf-onb-path">Klanten → Nieuwe klant</span> '
              'en maak daarna een project via <span class="cf-onb-path">Projecten → Nieuw project</span>.'),
-            ("3", "📦 Producten &amp; Onderdelen",
+            ("3", '<span class="cf-onb-step-ic"><i class="bi bi-box-seam"></i></span>Producten &amp; Onderdelen',
              'Voeg je materialen toe via <span class="cf-onb-path">Producten → Nieuw product</span> '
              'en voeg de ruimtes/onderdelen toe via <span class="cf-onb-path">Projecten → Bekijken</span>.'),
-            ("4", "📄 PDF genereren",
+            ("4", '<span class="cf-onb-step-ic"><i class="bi bi-file-earmark-text"></i></span>PDF genereren',
              'Klik op <span class="cf-onb-path">PDF genereren</span> en kies <strong>Offerte</strong> '
              'of <strong>Factuur</strong> om direct een professioneel document te downloaden.'),
         ]
@@ -5644,7 +5645,7 @@ if selected == "Dashboard":
                 save_data()
                 st.rerun()
             st.markdown(
-                '<div class="cf-onb-titel">Welkom bij CoatFlow 👋</div>'
+                '<div class="cf-onb-titel">Welkom bij CoatFlow</div>'
                 '<div class="cf-onb-sub">Volg onderstaande stappen om binnen enkele minuten '
                 'je eerste offerte of factuur te maken.</div>',
                 unsafe_allow_html=True)
