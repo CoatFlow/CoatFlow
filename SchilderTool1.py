@@ -6451,6 +6451,9 @@ elif selected == "Projecten":
     /* Acties kaart: witte achtergrond */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk){background:#FFFFFF !important;border:1px solid #E8EFF5 !important;border-radius:18px !important;box-shadow:0 1px 4px rgba(0,0,0,0.05) !important;}
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stVerticalBlock"]{background:#FFFFFF !important;gap:4px !important;border:none !important;}
+    /* Het witte binnenblok neemt de 18px-ronding over; anders schildert het met vierkante
+       hoeken over de ronding van de kaart heen (zelfde fix als de Onderdeel-toevoegen-kaart). */
+    [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) > [data-testid="stVerticalBlock"]{border-radius:18px !important;overflow:hidden !important;}
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stMarkdownContainer"]{background:#FFFFFF !important;}
     /* Transparant voor stMarkdownContainer BINNEN knoppen (fix witte blokken) */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stBaseButton-secondary"] [data-testid="stMarkdownContainer"]{background:transparent !important;}
@@ -9348,9 +9351,9 @@ elif selected == "Producten":
                         with _em1:
                             _ep_naam     = st.text_input("Productnaam *", value=_edit_pr["naam"])
                             _ep_prijs    = st.number_input("Prijs (€)", value=float(_edit_pr["prijs"]), min_value=0.0, step=0.5, format="%.2f")
-                            _ep_verbruik = st.number_input(_ep_verbruik_lbl, value=float(_edit_pr["verbruik"]), min_value=0.001, step=0.01, format="%.3f",
+                            _ep_verbruik = st.number_input(_ep_verbruik_lbl, value=float(_edit_pr["verbruik"]), min_value=0.01, step=0.01, format="%.2f",
                                                            help="Voor Kit en Afplakken geldt: per strekkende meter.")
-                            _ep_inhoud   = st.number_input("Inhoud verpakking", value=float(_edit_pr.get("inhoud", 10.0)), min_value=0.001, step=0.5, format="%.3f",
+                            _ep_inhoud   = st.number_input("Inhoud verpakking", value=float(_edit_pr.get("inhoud", 10.0)), min_value=0.1, step=0.5, format="%.1f",
                                                            help="Hoeveelheid per verpakking, bijv. 10 liter, 310 ml, 50 meter.")
                         with _em2:
                             _enh_opties = ["liter", "tube", "rol", "vel", "stuk", "m²", "kg"]
@@ -9646,16 +9649,16 @@ elif selected == "Producten":
                     '<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:10px;">'
                     'Verbruik (per m² / per meter) <span style="color:#F59E0B;font-weight:700;">*</span></div>',
                     unsafe_allow_html=True)
-                p_verbruik = st.number_input("Verbruik", min_value=0.001,
-                                             step=0.01, format="%.3f", label_visibility="collapsed", key="pn_verbruik",
+                p_verbruik = st.number_input("Verbruik", min_value=0.01,
+                                             step=0.01, format="%.2f", label_visibility="collapsed", key="pn_verbruik",
                                              help="Voor Kit en Afplakken geldt: per strekkende meter. Overige producten: per m².")
 
                 st.markdown(
                     '<div style="font-size:13px;font-weight:500;color:#374151;margin-bottom:2px;margin-top:10px;">'
                     'Inhoud verpakking <span style="color:#F59E0B;font-weight:700;">*</span></div>',
                     unsafe_allow_html=True)
-                p_inhoud = st.number_input("Inhoud", min_value=0.001,
-                                           step=0.5, format="%.3f", label_visibility="collapsed", key="pn_inhoud",
+                p_inhoud = st.number_input("Inhoud", min_value=0.1,
+                                           step=0.5, format="%.1f", label_visibility="collapsed", key="pn_inhoud",
                                            help="Hoeveelheid per verpakking, bijv. 10 liter, 310 ml, 50 meter, 10 vellen.")
 
             with pf2:
