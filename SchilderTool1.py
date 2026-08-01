@@ -6450,7 +6450,7 @@ elif selected == "Projecten":
         border:none !important;border-radius:0 !important;box-shadow:none !important;margin-top:0 !important;}
     /* Acties kaart: witte achtergrond */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk){background:#FFFFFF !important;border:1px solid #E8EFF5 !important;border-radius:18px !important;box-shadow:0 1px 4px rgba(0,0,0,0.05) !important;}
-    [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stVerticalBlock"]{background:#FFFFFF !important;gap:4px !important;}
+    [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stVerticalBlock"]{background:#FFFFFF !important;gap:4px !important;border:none !important;}
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stMarkdownContainer"]{background:#FFFFFF !important;}
     /* Transparant voor stMarkdownContainer BINNEN knoppen (fix witte blokken) */
     [data-testid="stLayoutWrapper"]:has(>[data-testid="stVerticalBlock"]):has(.pj-act-mk) [data-testid="stBaseButton-secondary"] [data-testid="stMarkdownContainer"]{background:transparent !important;}
@@ -7372,7 +7372,6 @@ p._matLp={down:down,cancel:cancel,move:move,st:st};
                         if not ond_wz:
                             st.markdown(
                                 '<div style="color:#94A3B8;font-size:12.5px;padding:6px 2px 0;line-height:1.5;">'
-                                '<i class="bi bi-arrow-left" style="margin-right:5px;color:#CBD5E1;"></i>'
                                 'Kies eerst werkzaamheden — de benodigde afmetingen verschijnen hier.'
                                 '</div>', unsafe_allow_html=True)
                         else:
@@ -10862,11 +10861,9 @@ elif selected == "Instellingen":
                     ("toeslag_hoogte_pct",  "rulers",           "Hoogte toeslag",      "Van toepassing bij werken op hoogte (>2,5m)",        "#EFF6FF", "#2563EB"),
                     ("toeslag_spoed_pct",   "lightning-charge", "Spoed toeslag",       "Toeslag voor spoedopdrachten buiten kantooruren",    "#FFFBEB", "#D97706"),
                     ("toeslag_buiten_pct",  "cloud-rain",       "Buitenwerk toeslag",  "Extra kosten voor buitenschilderwerk",               "#F0FDF4", "#059669"),
-                    ("toeslag_steiger_pct", "ladder",           "Steiger toeslag",     "Kosten voor steiger plaatsing en huur",              "#F5F3FF", "#7C3AED"),
                     ("toeslag_weekend_pct", "calendar-week",    "Weekendtoeslag",      "Toeslag voor werkzaamheden in het weekend",          "#FEF3C7", "#B45309"),
                     ("toeslag_avond_pct",   "moon-stars",       "Avondtoeslag",        "Toeslag voor avond- en nachtwerk",                  "#EEF2FF", "#4338CA"),
                     ("toeslag_winter_pct",  "thermometer-low",  "Wintertoeslag",       "Toeslag voor werkzaamheden bij vorst of sneeuw",    "#F0F9FF", "#0284C7"),
-                    ("toeslag_reis_pct",    "car-front",        "Reiskostentoeslag",   "Toeslag voor reisafstand boven normaal",             "#FFF7ED", "#EA580C"),
                 ]
                 for _tkey, _tico, _tlbl, _tdsc, _tbg, _tclr in _TOESLAGEN:
                     _tc1, _tc2 = st.columns([4, 1])
