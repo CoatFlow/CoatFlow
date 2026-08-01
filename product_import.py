@@ -21,6 +21,11 @@ Windows, Linux, Docker en cloud-hosting zonder extra packages.
 import re
 import json
 import html as _html
+import socket
+import ipaddress
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit, urljoin
 
 # Welke velden een importbron mag invullen (subset van het productformulier).
 PRODUCT_IMPORT_VELDEN = ("naam", "prijs", "inhoud", "inhoud_eenheid",
@@ -65,9 +70,70 @@ _FOUT_TRAAG = "De website reageert te traag. Probeer het over een moment nog een
 _FOUT_404 = "Deze pagina bestaat niet (meer). Controleer of de link klopt."
 _FOUT_GEBLOKKEERD = ("Deze website blokkeert automatisch ophalen door programma's. "
                      "Vul de gegevens handmatig in — dat werkt altijd.")
+_FOUT_INTERN_ADRES = ("Deze link kan niet worden opgehaald. Plak de volledige link van "
+                      "de productpagina op de website van de leverancier.")
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+_MAX_REDIRECTS = 5
+
+
+# ============================================================
+# 0) SSRF-afscherming — vóór ELKE netwerkverbinding (initieel én per redirect-hop)
+# ============================================================
+# BUG-FIX (kritiek, SSRF): de oude check keek alleen of de hostnaam "op een domein
+# leek" (bevat een punt, geen spaties) — een IP-literal als 169.254.169.254 (cloud-
+# metadata) of elk intern adres (10.x/192.168.x/localhost) voldeed daar triviaal aan,
+# en 'allow_redirects=True' volgde bovendien blind elke doorverwijzing. Iedere
+# ingelogde gebruiker kon zo de server dwingen een intern adres op te vragen. Fix:
+# elke hostnaam wordt vóór het verbinden daadwerkelijk opgelost en elk resulterend
+# IP-adres (v4 én v6) getoetst tegen privé/lokale/gereserveerde ranges — inclusief
+# vóór elke afzonderlijke redirect-hop, niet alleen de eerste aanvraag.
+def _host_is_safe(host: str) -> bool:
+    """True als GEEN van de IP-adressen waar deze hostnaam naar oplost privé, lokaal
+    of gereserveerd is. Kan de hostnaam niet worden opgelost, dan faalt dit VEILIG
+    (geweigerd) i.p.v. toegestaan."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        ip_str = info[4][0].split("%")[0]   # IPv6 zone-id (bv. %eth0) wegknippen
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+def _url_is_safe(url: str) -> bool:
+    """Schema + hostnaam-vorm + daadwerkelijke IP-veiligheid. Wordt aangeroepen vóór
+    de initiële aanvraag ÉN vóór elke redirect-hop."""
+    try:
+        parts = urlsplit(url)
+    except Exception:
+        return False
+    if parts.scheme.lower() not in ("http", "https"):
+        return False
+    host = parts.hostname
+    if not host or "." not in host or " " in host:
+        return False
+    return _host_is_safe(host)
+
+
+class _VeiligeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Volgt een redirect alleen als het doel opnieuw de host-/IP-check doorstaat —
+    zelfde SSRF-afscherming als het requests-pad, voor het urllib-noodpad."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _url_is_safe(newurl):
+            return None   # blokkeert de redirect
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 # ============================================================
@@ -82,6 +148,8 @@ def _haal_html(url, timeout=12, max_bytes=2_000_000):
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.7",
     }
+    if not _url_is_safe(url):
+        return None, _FOUT_INTERN_ADRES
     try:
         import requests
     except ImportError:                    # hoort niet voor te komen (Streamlit-dep)
@@ -90,15 +158,30 @@ def _haal_html(url, timeout=12, max_bytes=2_000_000):
     fout = _FOUT_GENERIEK
     for _poging in (1, 2):                 # 2e poging alleen na timeout/verbindingsfout
         try:
-            try:
-                resp = requests.get(url, headers=headers, timeout=timeout,
-                                    allow_redirects=True)
-            except requests.exceptions.Timeout:
-                fout = _FOUT_TRAAG
-                continue
-            except requests.exceptions.ConnectionError:
-                fout = _FOUT_VERBINDING
-                continue
+            resp = None
+            huidige_url = url
+            # Redirects HANDMATIG volgen i.p.v. allow_redirects=True: elke hop moet
+            # opnieuw de host-/IP-check doorstaan, anders kan een externe link de
+            # server serverside naar een intern adres laten doorspringen.
+            for _hop in range(_MAX_REDIRECTS + 1):
+                try:
+                    resp = requests.get(huidige_url, headers=headers, timeout=timeout,
+                                        allow_redirects=False)
+                except requests.exceptions.Timeout:
+                    fout = _FOUT_TRAAG
+                    resp = None
+                    break
+                except requests.exceptions.ConnectionError:
+                    fout = _FOUT_VERBINDING
+                    resp = None
+                    break
+                if resp.status_code not in (301, 302, 303, 307, 308) or not resp.headers.get("Location"):
+                    break
+                huidige_url = urljoin(huidige_url, resp.headers["Location"])
+                if not _url_is_safe(huidige_url):
+                    return None, _FOUT_INTERN_ADRES
+            if resp is None:
+                continue                   # timeout/verbindingsfout -> volgende poging
             status = resp.status_code
             if status in (401, 403, 429, 503):
                 return None, _FOUT_GEBLOKKEERD     # WAF/botbeveiliging of tijdelijk plat
@@ -124,13 +207,14 @@ def _haal_html(url, timeout=12, max_bytes=2_000_000):
 
 
 def _haal_html_urllib(url, headers, timeout, max_bytes):
-    """Noodpad zonder 'requests'. Zelfde foutonderscheid, geen retry."""
-    import socket
-    import urllib.error
-    import urllib.request
+    """Noodpad zonder 'requests'. Zelfde foutonderscheid, geen retry. Volgt redirects
+    uitsluitend naar opnieuw-gevalideerde adressen (_VeiligeRedirectHandler)."""
+    if not _url_is_safe(url):
+        return None, _FOUT_INTERN_ADRES
+    opener = urllib.request.build_opener(_VeiligeRedirectHandler)
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with opener.open(req, timeout=timeout) as r:
             raw = r.read(max_bytes)
         tekst = raw.decode("utf-8", "replace")
         return (tekst, None) if tekst.strip() else (None, _FOUT_GENERIEK)

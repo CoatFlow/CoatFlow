@@ -107,12 +107,29 @@ _init_failed = False
 # ELKE load/save een nieuwe client opgezet (trage handshake → merkbare hapering).
 _anon = None
 _anon_lock = threading.Lock()
-# dirty-tracking: laatst weggeschreven content-hash per (company_id, groep)
-_last_hashes: dict[tuple, str] = {}
-# per-rij dirty-tracking: laatst weggeschreven {id: rij-hash} per (company_id, tabel).
-# Hiermee upsert _sync_table alléén gewijzigde/nieuwe rijen en delete alléén verdwenen
-# rijen → 1 kleine query per save i.p.v. "alle rijen herschrijven + altijd een delete".
-_last_rows: dict[tuple, dict] = {}
+# dirty-tracking: laatst weggeschreven content-hash per (company_id, groep), en
+# per-rij dirty-tracking ({id: rij-hash} per (company_id, tabel)) — hiermee upsert
+# _sync_table alléén gewijzigde/nieuwe rijen en delete alléén verdwenen rijen → 1
+# kleine query per save i.p.v. "alle rijen herschrijven + altijd een delete".
+#
+# BUG-FIX (kritiek, data-verlies): dit stond eerder in EEN module-dict, gedeeld door
+# ALLE gelijktijdige sessies van hetzelfde bedrijf. Sessie A voegt rij X toe en slaat
+# op → de gedeelde cache kent X. Sessie B (nog met háár eigen, oudere snapshot) slaat
+# daarna iets ONGERELATEERDS op; X zat niet in B's eigen rijenlijst, dus B's diff zag
+# X als "verdwenen" en verwijderde 'm écht — B kende X simpelweg nooit, ongeacht hoe
+# vers de cache is. Fix: de cache leeft nu IN st.session_state, dus elke sessie
+# diff't uitsluitend tegen wat ZIJZELF heeft geladen/geschreven. Een rij die een
+# andere, gelijktijdige sessie toevoegt is dan voor mijn sessie onzichtbaar — en blijft
+# dus ongemoeid — i.p.v. foutief als "door mij verwijderd" te worden geïnterpreteerd.
+# Buiten een actieve Streamlit-context (geen sessie, bv. een los script) valt dit terug
+# op een kale dict; _sync_table's eigen "onbekende vorige staat"-tak blijft dan de
+# veilige achtervang (zie verderop).
+def _sess_cache() -> dict:
+    try:
+        import streamlit as st
+        return st.session_state.setdefault("_db_sync_cache", {"hashes": {}, "rows": {}})
+    except Exception:
+        return {"hashes": {}, "rows": {}}
 
 
 def _secrets():
@@ -642,28 +659,31 @@ _SYNC_GROUPS = ("klanten", "producten", "personeel", "taken", "projecten")
 
 def _seed_row_hashes(company_id, payloads):
     """Leg per sync-tabel de {id: rij-hash} vast, zodat _sync_table na een load meteen
-    weet welke rijen al in de DB staan (eerste save = niets herschrijven)."""
+    weet welke rijen al in de DB staan (eerste save = niets herschrijven). Dit is de
+    baseline van DEZE sessie — ververst bij elke load_data() (eenmaal per sessie)."""
+    rows = _sess_cache()["rows"]
     for grp in _SYNC_GROUPS:
-        _last_rows[(company_id, grp)] = {
+        rows[(company_id, grp)] = {
             r["id"]: _hash_stable(r) for r in payloads.get(grp, []) if r.get("id") is not None
         }
 
 
 def _seed_hashes(company_id, state):
     payloads = _group_payloads(state)
+    hashes = _sess_cache()["hashes"]
     for grp, content in payloads.items():
-        _last_hashes[(company_id, grp)] = _hash_stable(content)
+        hashes[(company_id, grp)] = _hash_stable(content)
     _seed_row_hashes(company_id, payloads)
 
 
 def _is_changed(company_id, grp, content) -> bool:
     """Alleen CHECKEN (niet markeren) — markeren gebeurt pas ná een geslaagde write,
     zodat een mislukte JWT-poging + service_role-terugval de write veilig overdoet."""
-    return _last_hashes.get((company_id, grp)) != _hash_stable(content)
+    return _sess_cache()["hashes"].get((company_id, grp)) != _hash_stable(content)
 
 
 def _mark_saved(company_id, grp, content):
-    _last_hashes[(company_id, grp)] = _hash_stable(content)
+    _sess_cache()["hashes"][(company_id, grp)] = _hash_stable(content)
 
 
 _COL_ONTBREEKT = re.compile(r"could not find the '([^']+)' column", re.I)
@@ -711,11 +731,14 @@ def _sync_table(cl, table, company_id, rows):
     """Schrijf de tabel weg met zo min mogelijk round-trips:
       • upsert ALLEEN gewijzigde/nieuwe rijen (t.o.v. wat we het laatst wegschreven);
       • DELETE alleen als er daadwerkelijk rijen verdwenen zijn (anders: geen query).
-    Retry-veilig: _last_rows wordt pas bijgewerkt nadat upsert én delete zijn geslaagd,
-    zodat de service_role-terugval de write veilig kan overdoen. Als de vorige staat
-    onbekend is (geen seed), valt 'ie terug op het oude, veilige "alles herschrijven"."""
+    Retry-veilig: de sessie-cache wordt pas bijgewerkt nadat upsert én delete zijn
+    geslaagd, zodat de service_role-terugval de write veilig kan overdoen. Als de
+    vorige staat onbekend is (geen seed), valt 'ie terug op het oude, veilige "alles
+    herschrijven". 'prev' is altijd de eigen, laatst bekende stand van DEZE sessie
+    (zie _sess_cache) — nooit die van een andere, gelijktijdig actieve sessie."""
     key = (company_id, table)
-    prev = _last_rows.get(key)  # {id: hash} of None (onbekend)
+    sess_rows = _sess_cache()["rows"]
+    prev = sess_rows.get(key)  # {id: hash} of None (onbekend)
 
     cur: dict = {}
     changed = []
@@ -743,7 +766,7 @@ def _sync_table(cl, table, company_id, rows):
         if removed:
             cl.table(table).delete().eq("company_id", company_id).in_("id", removed).execute()
 
-    _last_rows[key] = cur
+    sess_rows[key] = cur
 
 
 def save_company_data(company_id, state: dict):

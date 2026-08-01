@@ -91,6 +91,15 @@ PERSISTENT_KEYS = [
     "agenda_taken",
 ]
 
+# Veilige lege staat per PERSISTENT_KEYS-sleutel — gebruikt door load_data() als de
+# Supabase-load mislukt (zie BUG-FIX hieronder). instellingen={} wordt direct daarna
+# door init_state()'s bestaande merge met STANDAARD_INSTELLINGEN aangevuld.
+_LEGE_PERSISTENTE_STAAT = {
+    "klanten": [], "projecten": [], "personeel": [], "producten": [], "taken": [],
+    "instellingen": {}, "agenda_taken": {},
+    "volgende_project_id": 1, "volgende_klant_id": 1,
+}
+
 def _use_db():
     """True als de Supabase-laag geladen én geconfigureerd is."""
     try:
@@ -133,8 +142,17 @@ def _save_data_json():
 
 def load_data():
     """Laad persistente data naar session_state.
-    Primair: Supabase (bron van waarheid). Terugval: lokale JSON, zodat de app
-    ook zonder DB-configuratie of bij een verbindingsfout blijft draaien."""
+    Primair: Supabase (bron van waarheid). Terugval op lokale JSON geldt UITSLUITEND
+    als er helemaal GEEN Supabase is geconfigureerd (lokale dev-modus zonder secrets).
+
+    BUG-FIX (kritiek, tenant-isolatie): zolang de app in Supabase-modus draait, mag een
+    laadfout NOOIT stil terugvallen op data/appdata.json — dat is één vast, gedeeld
+    bestand zonder company_id-scoping. Eerder viel elke fout hier (netwerkhapering,
+    tijdelijke Supabase-storing, RLS-hiccup — niet alleen 'geen DB geconfigureerd')
+    terug op dat bestand, wat exact het cross-tenant-lek herintroduceerde dat elders al
+    bewust is dichtgezet (zie de company_id-fail-safe hieronder). Bij een fout blijft
+    de sessie nu leeg (met een zichtbare foutmelding) i.p.v. mogelijk andermans of
+    verouderde lokale data te tonen."""
     if _use_db():
         try:
             # Fase 2: UITSLUITEND de company van de INGELOGDE gebruiker (door de auth-gate
@@ -152,35 +170,45 @@ def load_data():
             # DB geconfigureerd maar nog geen company → migratie nog niet gedraaid
             st.session_state["_db_fout"] = (
                 "Database is geconfigureerd, maar er is nog geen bedrijf gevonden. "
-                "Is de migratie (migrate_json_to_supabase.py) al uitgevoerd? "
-                "De app draait nu tijdelijk op de lokale back-up."
+                "Is de migratie (migrate_json_to_supabase.py) al uitgevoerd?"
             )
         except Exception as e:
             st.session_state["_db_fout"] = (
-                f"Kon niet met de database verbinden — de app draait nu op de lokale "
-                f"back-up. Details: {e}"
+                f"Kon niet met de database verbinden. Ververs de pagina om het "
+                f"opnieuw te proberen. Details: {e}"
             )
+        for key, leeg in _LEGE_PERSISTENTE_STAAT.items():
+            st.session_state.setdefault(key, leeg)
+        return
     _load_data_json()
 
 def save_data():
-    """Sla persistente data op. Primair Supabase; bij geen DB → lokale JSON.
-    Schrijft nooit naar beide tegelijk (geen hybride opslag)."""
-    _cid = st.session_state.get("company_id") or st.session_state.get("_company_id")
-    if _use_db() and _cid:
+    """Sla persistente data op. Primair Supabase; lokale JSON UITSLUITEND als er
+    helemaal geen Supabase is geconfigureerd. Schrijft nooit naar beide tegelijk."""
+    if _use_db():
+        _cid = st.session_state.get("company_id") or st.session_state.get("_company_id")
+        if not _cid:
+            # BUG-FIX (kritiek, tenant-isolatie): ook bij een onverwacht ontbrekende
+            # company_id nooit naar het gedeelde lokale bestand schrijven — eerder
+            # viel deze situatie stil door naar _save_data_json().
+            st.session_state["_db_fout"] = (
+                "Opslaan is mislukt: geen actief bedrijf gevonden. Ververs de pagina "
+                "en probeer het opnieuw."
+            )
+            return
         try:
             _db.save_company_data(
                 _cid,
                 {key: st.session_state.get(key) for key in PERSISTENT_KEYS},
             )
             st.session_state.pop("_db_fout", None)
-            return
         except Exception as e:
             # Geen stille JSON-write (zou hybride opslag worden); fout netjes tonen.
             st.session_state["_db_fout"] = (
                 f"Opslaan in de database is mislukt. Je laatste wijziging is mogelijk "
                 f"niet bewaard. Details: {e}"
             )
-            return
+        return
     _save_data_json()
 
 # =====================================================
