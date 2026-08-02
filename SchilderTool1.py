@@ -1545,10 +1545,22 @@ def eerste_validatiefout(*resultaten):
 
 def _pdf_cache_key(project):
     """MD5-hash van project + volledige instellingen (SP-007) → wijzigt zodra de
-    projectdata óf de instellingen wijzigen, en is identiek voor identieke inhoud."""
+    projectdata óf de instellingen wijzigen, en is identiek voor identieke inhoud.
+
+    BUG-FIX (belangrijk): producten/personeel ontbraken hier. Voor een NIET-bevroren
+    (Concept) project rekent bereken_onderdeel() met LIVE productprijzen/uurtarieven —
+    zonder deze twee in de hash bleef de cache-key ongewijzigd na zo'n prijswijziging,
+    dus kreeg de klant de oude (verouderde) PDF terwijl het scherm al het nieuwe bedrag
+    toonde. Voor een bevroren project maakt dit niets uit (de prijs-snapshot wordt
+    gebruikt), dus geen functionele impact daar — enkel een extra cache-miss."""
     return hashlib.md5(
         json.dumps(
-            {"project": project, "instellingen": st.session_state.instellingen},
+            {
+                "project": project,
+                "instellingen": st.session_state.instellingen,
+                "producten": st.session_state.producten,
+                "personeel": st.session_state.personeel,
+            },
             sort_keys=True, default=str
         ).encode()
     ).hexdigest()
@@ -2294,8 +2306,8 @@ def _render_sjabloon_kaart(soort):
         sjb = sjabloon_ophalen(soort)
         if sjb:
             _meta = sjb.get("meta") or {}
-            ui_alert(f"Eigen sjabloon actief — “{_meta.get('bestandsnaam', 'sjabloon.docx')}” "
-                     f"(geüpload {str(_meta.get('geupload', ''))[:10]}). Nieuwe upload vervangt het.", "success")
+            ui_alert(f"Eigen sjabloon actief — “{h(_meta.get('bestandsnaam', 'sjabloon.docx'))}” "
+                     f"(geüpload {h(str(_meta.get('geupload', ''))[:10])}). Nieuwe upload vervangt het.", "success")
 
         # Verwijderknop rechts náást het uploadvak (alleen als er een sjabloon is).
         if sjb:
@@ -9536,6 +9548,12 @@ elif selected == "Producten":
                         with _sc:
                             st.markdown('<span class="cf-ico-mk cf-ico-save-mk"></span>', unsafe_allow_html=True)
                             if st.form_submit_button("Opslaan", use_container_width=True, type="primary"):
+                              # BUG-FIX (belangrijk): dit bewerk-formulier had géén validatie — een
+                              # product kon zo alsnog naar €0,00/lege naam bewerkt worden, ook al
+                              # blokkeert het aanmaak-formulier dat al. Zelfde check hier hergebruikt.
+                              if not (_ep_naam and _ep_wz and _ep_inhoud > 0 and _ep_prijs > 0):
+                                ui_alert("Vul naam, prijs, werkzaamheden en inhoud in.", "error")
+                              else:
                                 for _p in st.session_state.producten:
                                     if _p["id"] == _edit_pr["id"]:
                                         _p["naam"]          = _ep_naam
@@ -10920,8 +10938,18 @@ elif selected == "Instellingen":
                                                                  help="Wordt gebruikt door de factuurmodule (toekomstige versie).")
 
             if _save("f"):
-                save_data()
-                st.toast("Financiële instellingen opgeslagen!")
+                # Enige veld hier met een echt correctheidsrisico: een €0-standaarduurloon
+                # is als "standaardtarief" zinloos (vgl. de €0-productprijs-fix). De overige
+                # velden zijn al veilig begrensd door hun widget (slider/selectbox/min_value)
+                # of bewust optioneel (km-vergoeding/minimumprijs/aanbetaling mogen wél 0 zijn).
+                _fin_fout = eerste_validatiefout(
+                    valideer_getal(inst["standaard_uurloon"], "uurtarief", "Standaard uurloon", toestaan_nul=False),
+                )
+                if _fin_fout:
+                    ui_alert(_fin_fout, "error")
+                else:
+                    save_data()
+                    st.toast("Financiële instellingen opgeslagen!")
 
     # ══════════════════════════════════════════════════════
     # TAB 3 — OFFERTES

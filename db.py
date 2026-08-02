@@ -102,10 +102,8 @@ class DbError(Exception):
 _client = None
 _client_lock = threading.Lock()
 _init_failed = False
-# anon-client (voor het JWT-pad) — óók als singleton cachen, anders wordt er bij
-# ELKE load/save een nieuwe client opgezet (trage handshake → merkbare hapering).
-_anon = None
-_anon_lock = threading.Lock()
+# anon-client (voor het JWT-pad) wordt PER SESSIE gecachet in st.session_state, zie
+# _anon_client() hieronder — geen module-global (dat gaf een cross-tenant-lekrisico).
 # dirty-tracking: laatst weggeschreven content-hash per (company_id, groep), en
 # per-rij dirty-tracking ({id: rij-hash} per (company_id, tabel)) — hiermee upsert
 # _sync_table alléén gewijzigde/nieuwe rijen en delete alléén verdwenen rijen → 1
@@ -387,23 +385,39 @@ def _project_row(p: dict) -> dict:
 # Veilige terugval: lukt het JWT-pad niet (geen token, verlopen, misconfig), dan
 # gebruikt db de service_role client. De queries filteren ALTIJD op company_id,
 # dus geen van beide paden kan ooit data van een ander bedrijf teruggeven.
+#
+# BUG-FIX (belangrijk, cross-tenant-lek): deze client stond eerder in een module-
+# global (proces-breed, gedeeld door ALLE gelijktijdige Streamlit-sessies/threads).
+# _jwt_data_client() muteert 'm daarna met cl.postgrest.auth(tok) — het user-JWT van
+# DE HUIDIGE sessie. Interleaven twee sessies' aanroepen (thread A zet haar token,
+# thread B zet ertussen haar eigen token, thread A's query loopt dan met B's token),
+# dan voert A's query uit met B's identiteit/RLS-rechten. Zelfde bugklasse als de
+# eerdere auth-client-singleton in auth.py, nu in het databasepad. Fix: per-sessie
+# cachen (net als _sess_cache() bij de eerdere cross-sessie-databug) i.p.v.
+# proces-breed — elke sessie krijgt zo haar eigen client-instantie, maar binnen één
+# sessie wordt de (trage) handshake nog steeds maar één keer gedaan.
 def _anon_client():
-    global _anon
-    if _anon is not None:
-        return _anon
     s = _secrets()
     key = s.get("supabase_anon_key") if s else None
     if not (s and s.get("supabase_url") and key):
         return None
-    with _anon_lock:
-        if _anon is not None:
-            return _anon
-        try:
-            from supabase import create_client
-            _anon = create_client(s["supabase_url"], key)
-        except Exception:
-            _anon = None
-        return _anon
+    try:
+        import streamlit as st
+        sess = st.session_state
+    except Exception:
+        sess = None
+    if sess is not None:
+        cl = sess.get("_db_anon_client")
+        if cl is not None:
+            return cl
+    try:
+        from supabase import create_client
+        cl = create_client(s["supabase_url"], key)
+    except Exception:
+        return None
+    if sess is not None:
+        sess["_db_anon_client"] = cl
+    return cl
 
 
 def _token_has_company_id(tok: str) -> bool:
