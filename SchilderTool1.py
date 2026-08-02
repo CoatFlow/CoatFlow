@@ -489,8 +489,10 @@ def migreer_onderdeel(ond):
     ond.setdefault("meters", 0)
     if not isinstance(ond.get("werkzaamheden"), list):
         ond["werkzaamheden"] = []
-    for _tk in ("toeslag_hoogte", "toeslag_spoed", "toeslag_buiten", "toeslag_steiger",
-                "toeslag_weekend", "toeslag_avond", "toeslag_winter", "toeslag_reis"):
+    # Steiger/Reis niet meer geïnitialiseerd: niet van toepassing (uit de rekenkern
+    # gehaald, zie bereken_onderdeel) en al eerder uit de Instellingen-UI verwijderd.
+    for _tk in ("toeslag_hoogte", "toeslag_spoed", "toeslag_buiten",
+                "toeslag_weekend", "toeslag_avond", "toeslag_winter"):
         ond.setdefault(_tk, False)
     ond.setdefault("arbeid_uren_override", None)
     return ond
@@ -548,7 +550,7 @@ _INST_BASIS_DEFAULTS = {
     "email": "info@schilderpro.nl", "iban": "NL12 ABCD 0123 4567 89",
     "standaard_marge": 25, "standaard_btw": 21,
     "toeslag_hoogte_pct": 10, "toeslag_spoed_pct": 20,
-    "toeslag_buiten_pct": 10, "toeslag_steiger_pct": 15,
+    "toeslag_buiten_pct": 10,
     "offerte_geldigheid": 30, "betalingstermijn": 14,
     "offerte_tekst": "Bedankt voor uw interesse. Wij bieden u hierbij onze offerte aan.",
     "voorwaarden": "Betaling binnen 14 dagen na factuurdatum. Op al onze werkzaamheden zijn onze algemene voorwaarden van toepassing.",
@@ -1136,16 +1138,18 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
     subtotaal = materiaal + arbeid
 
     # Toeslagen — alle percentages uit Instellingen → Toeslagen (SP-012)
+    # BUG-FIX (kritiek): toeslag_steiger/toeslag_reis zijn niet van toepassing op dit
+    # bedrijf en al uit de Instellingen-UI verwijderd — maar deze lus bleef ze wél
+    # toepassen op elk onderdeel waarvan de vlag ooit (vóór de UI-verwijdering) op
+    # True was gezet, onzichtbaar voor de gebruiker. Nu volledig uit de rekenkern.
     toeslagen = 0.0
     for _ok, _pk in (
         ("toeslag_hoogte",  "toeslag_hoogte_pct"),
         ("toeslag_spoed",   "toeslag_spoed_pct"),
         ("toeslag_buiten",  "toeslag_buiten_pct"),
-        ("toeslag_steiger", "toeslag_steiger_pct"),
         ("toeslag_weekend", "toeslag_weekend_pct"),
         ("toeslag_avond",   "toeslag_avond_pct"),
         ("toeslag_winter",  "toeslag_winter_pct"),
-        ("toeslag_reis",    "toeslag_reis_pct"),
     ):
         if onderdeel.get(_ok):
             toeslagen += subtotaal * (float(inst.get(_pk, 0) or 0) / 100)
@@ -2045,7 +2049,12 @@ def _sjb_tag_rij(template_tr, tag):
 def sjabloon_templatiseer(docx_bytes, mapping):
     """Zet het geüploade voorbeeld om in een docxtpl-sjabloon volgens de (bevestigde)
     mapping: {"velden": {veld: letterlijke_tekst}, "tabel": None | {"tabel_index",
-    "gegevens_rij_indexen", "kolommen": {kolom_index: veld}}}. Return nieuwe bytes."""
+    "gegevens_rij_indexen", "kolommen": {kolom_index: veld}}}.
+    Return (nieuwe_bytes, niet_vervangen_labels): labels van velden waarvan de
+    letterlijke tekst NERGENS in het document is teruggevonden — bv. na een
+    handmatige correctie in het bevestigingsformulier die niet meer exact matcht.
+    Die velden blijven op de oorspronkelijke voorbeeldtekst staan; de aanroeper
+    moet dit expliciet aan de gebruiker tonen (zie BUG-FIX hieronder)."""
     from docx import Document
     doc = Document(_sjb_io.BytesIO(docx_bytes))
 
@@ -2069,14 +2078,25 @@ def sjabloon_templatiseer(docx_bytes, mapping):
 
     # 2) Veldvervangingen document-breed — langste teksten eerst (tegen deel-overlap).
     velden = {v: t for v, t in (mapping.get("velden") or {}).items() if (t or "").strip()}
+    # BUG-FIX (kritiek): het return-resultaat van _sjb_vervang_in_par werd nergens
+    # opgevangen. Matchte een tekst NERGENS in het document (bv. een handmatige
+    # correctie die net niet meer letterlijk overeenkomt), dan faalde de vervanging
+    # stil — geen foutmelding, wél een 'opgeslagen'-toast — en bleef de originele
+    # voorbeeldtekst permanent op elke toekomstige offerte/factuur staan. Nu wordt
+    # per veld bijgehouden of er minstens één keer daadwerkelijk iets is vervangen.
+    niet_vervangen = []
     for veld, tekst in sorted(velden.items(), key=lambda kv: -len(kv[1])):
         placeholder = "{{ %s }}" % veld
+        gevonden = False
         for par in _sjb_iter_paragrafen(doc):
-            _sjb_vervang_in_par(par, tekst, placeholder)
+            if _sjb_vervang_in_par(par, tekst, placeholder):
+                gevonden = True
+        if not gevonden:
+            niet_vervangen.append(SJABLOON_VELDEN.get(veld, veld))
 
     uit = _sjb_io.BytesIO()
     doc.save(uit)
-    return uit.getvalue()
+    return uit.getvalue(), niet_vervangen
 
 
 # ── genereren (deterministisch; géén AI) ─────────────────────────────────────
@@ -2099,8 +2119,7 @@ def _sjb_onderdeel_regel(ond, calc):
         lagen = f"{ond.get('lagen', 1)}×"
     tsl = [naam for vlag, naam in (
         ("toeslag_hoogte", "Hoogte"), ("toeslag_spoed", "Spoed"), ("toeslag_buiten", "Buiten"),
-        ("toeslag_steiger", "Steiger"), ("toeslag_weekend", "Weekend"),
-        ("toeslag_avond", "Avond"), ("toeslag_winter", "Winter"), ("toeslag_reis", "Reis"),
+        ("toeslag_weekend", "Weekend"), ("toeslag_avond", "Avond"), ("toeslag_winter", "Winter"),
     ) if ond.get(vlag)]
     return {
         "onderdeel_naam": ond.get("naam", ""), "naam": ond.get("naam", ""),
@@ -2128,8 +2147,15 @@ def _sjb_context(project, soort):
     else:
         docnr = str(project.get("factuur_nummer") or "")
         dagen = _inst_getal(inst, "betalingstermijn", 14, int)
-    onderdelen = [_sjb_onderdeel_regel(o, bereken_onderdeel(o, marge, btw, project_id=project.get("id")))
-                  for o in project.get("onderdelen", [])]
+    # BUG-FIX (kritiek, prijs-snapshot): eerder rekende dit rechtstreeks via
+    # bereken_onderdeel() met LIVE prijzen, terwijl 'totaal' hierboven al wél
+    # snapshot-aware is — bij een bevroren offerte/factuur toonde het sjabloon dan
+    # regelbedragen die het eigen printtotaal tegenspraken (productprijs later
+    # gewijzigd = regel wijzigt mee, totaal niet). bereken_onderdelen_lijst is
+    # dezelfde snapshot-aware helper die maak_offerte_pdf/maak_factuur_pdf al
+    # gebruiken — nu is het sjabloon-pad daar consistent mee.
+    onderdelen = [_sjb_onderdeel_regel(o, c) for o, c in
+                  zip(project.get("onderdelen", []), bereken_onderdelen_lijst(project, marge, btw))]
     # Materieel & Overig als gewone regels ACHTER de onderdelen: het sjabloon van de
     # klant heeft één tabel met één rij-tag, dus zo verschijnen ze automatisch onderaan
     # die tabel — zonder dat het sjabloon aangepast hoeft te worden. Dezelfde sleutels,
@@ -2245,6 +2271,12 @@ def _render_sjabloon_kaart(soort):
             f'<div><div style="font-size:14.5px;font-weight:700;color:#0F172A;">Eigen {lbl}sjabloon</div>'
             f'<div style="font-size:12px;color:#94A3B8;">Sleep een fictieve, volledig ingevulde {lbl} (Word) hierheen — CoatFlow herkent automatisch wat vervangen moet worden.</div></div></div>',
             unsafe_allow_html=True)
+
+        # Waarschuwing van een vorige opslag tonen (overleeft de st.rerun() na opslaan —
+        # ui_alert() zelf is niet rerun-persistent, dus die loopt via session_state).
+        _waarschuwing = st.session_state.pop(f"sjb_waarschuwing_{soort}", None)
+        if _waarschuwing:
+            ui_alert(_waarschuwing, "warning")
 
         sjb = sjabloon_ophalen(soort)
         if sjb:
@@ -2385,7 +2417,7 @@ def _render_sjabloon_kaart(soort):
                                     "gegevens_rij_indexen": datarijen,
                                     "kolommen": gekozen}
             try:
-                nieuw = sjabloon_templatiseer(voorstel["bytes"], mapping)
+                nieuw, niet_vervangen = sjabloon_templatiseer(voorstel["bytes"], mapping)
                 meta = {"bestandsnaam": voorstel.get("naam", "sjabloon.docx"),
                         "geupload": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "velden": mapping["velden"], "tabel": mapping["tabel"]}
@@ -2394,7 +2426,20 @@ def _render_sjabloon_kaart(soort):
                     st.session_state.pop(k, None)
                 st.session_state[f"sjb_nonce_{soort}"] = \
                     st.session_state.get(f"sjb_nonce_{soort}", 0) + 1
-                st.toast(f"Eigen {lbl}sjabloon opgeslagen!", icon="✅")
+                if niet_vervangen:
+                    # BUG-FIX (kritiek): expliciet tonen i.p.v. stil — deze velden staan
+                    # nog op de oorspronkelijke voorbeeldtekst op elke toekomstige offerte/
+                    # factuur totdat de tekst hierboven weer letterlijk overeenkomt.
+                    st.session_state[f"sjb_waarschuwing_{soort}"] = (
+                        f"Sjabloon opgeslagen, maar {len(niet_vervangen)} veld(en) zijn NIET "
+                        f"letterlijk teruggevonden in het document en dus niet vervangen: "
+                        f"<b>{h(', '.join(niet_vervangen))}</b>. Op offertes/facturen blijft "
+                        f"hier de oorspronkelijke voorbeeldtekst staan. Pas het veld hierboven "
+                        f"aan zodat het weer exact overeenkomt met de tekst in het document, "
+                        f"en upload opnieuw.")
+                    st.toast(f"Sjabloon opgeslagen — {len(niet_vervangen)} veld(en) niet gevonden.", icon="⚠️")
+                else:
+                    st.toast(f"Eigen {lbl}sjabloon opgeslagen!", icon="✅")
                 st.rerun()
             except Exception as e:
                 ui_alert("Het sjabloon kon niet worden opgebouwd. Controleer of het bestand "
@@ -2548,11 +2593,9 @@ def maak_offerte_pdf(project):
         "toeslag_hoogte":  "Hoogte toeslag",
         "toeslag_spoed":   "Spoed toeslag",
         "toeslag_buiten":  "Buitenwerk toeslag",
-        "toeslag_steiger": "Steiger toeslag",
         "toeslag_weekend": "Weekendtoeslag",
         "toeslag_avond":   "Avondtoeslag",
         "toeslag_winter":  "Wintertoeslag",
-        "toeslag_reis":    "Reiskostentoeslag",
     }
 
     # BUG-07: permanent, opgeslagen offertenummer — nooit opnieuw berekend, niet
@@ -3117,8 +3160,7 @@ def maak_factuur_pdf(project):
 
     TOESLAG_NAMEN = {
         "toeslag_hoogte": "Hoogte", "toeslag_spoed": "Spoed", "toeslag_buiten": "Buitenwerk",
-        "toeslag_steiger": "Steiger", "toeslag_weekend": "Weekend", "toeslag_avond": "Avond",
-        "toeslag_winter": "Winter", "toeslag_reis": "Reiskosten",
+        "toeslag_weekend": "Weekend", "toeslag_avond": "Avond", "toeslag_winter": "Winter",
     }
 
     NAVY = (8, 26, 54);  BLUE = _hex_rgb(inst.get("bedrijfskleur", "#2563EB"))
@@ -6944,11 +6986,9 @@ if(!p._pjPopWatching){
                         if onderdeel.get("toeslag_hoogte"):  tsl.append("Hoogte")
                         if onderdeel.get("toeslag_spoed"):   tsl.append("Spoed")
                         if onderdeel.get("toeslag_buiten"):  tsl.append("Buiten")
-                        if onderdeel.get("toeslag_steiger"): tsl.append("Steiger")
                         if onderdeel.get("toeslag_weekend"): tsl.append("Weekend")
                         if onderdeel.get("toeslag_avond"):   tsl.append("Avond")
                         if onderdeel.get("toeslag_winter"):  tsl.append("Winter")
-                        if onderdeel.get("toeslag_reis"):    tsl.append("Reis")
                         _toesl = "".join(f'<span class="pd-chip-y">{t}</span>' for t in tsl) if tsl else '<span style="color:#CBD5E1;">—</span>'
                         # Omvang met eenheid achter de waarde: m² voor oppervlaktewerk, m¹ voor
                         # strekkende meter. Dual-unit (Schuren/Gronden) toont beide indien ingevuld.
@@ -10516,7 +10556,7 @@ elif selected == "Instellingen":
         "factuur_automatische_herinneringen": False,
         # Tab 5 — Toeslagen
         "toeslag_weekend_pct": 50, "toeslag_avond_pct": 25,
-        "toeslag_winter_pct": 10, "toeslag_reis_pct": 5,
+        "toeslag_winter_pct": 10,
         # Tab 6 — Voorkeuren
         "taal": "Nederlands", "datumweergave": "DD-MM-JJJJ", "valuta": "Euro (€)",
         "dashboard_periode": "Huidige maand", "dashboard_filter": "Alle projecten",

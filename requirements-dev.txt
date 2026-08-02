@@ -1,0 +1,9 @@
+# CoatFlow — dev-only dependencies (niet nodig in productie, dus los van
+# requirements.txt gehouden zodat de productie-install niet onnodig groeit).
+#
+# Draai de testsuite met:
+#   pip install -r requirements-dev.txt
+#   pytest
+
+-r requirements.txt
+pytest>=8

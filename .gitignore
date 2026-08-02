@@ -15,7 +15,9 @@ secrets.toml
 data/
 appdata.json
 
-# Ontwikkel-screenshots (kunnen echte klantnamen/adressen tonen) & losse test-scripts
+# Ontwikkel-screenshots (kunnen echte klantnamen/adressen tonen) & losse
+# wegwerp-testscripts los in de repo-root (NIET de echte testsuite in tests/,
+# zie de uitzondering hieronder — test_*.py matcht anders op elke diepte).
 *.png
 test_*.py
 verify_*.py
@@ -24,6 +26,10 @@ screenshot_*.py
 zoom_*.py
 inspect_*.py
 check_overlap.py
+!tests/test_*.py
+
+# Testsuite build-artefact
+.pytest_cache/
 
 # Python-caches & virtuele omgevingen
 __pycache__/

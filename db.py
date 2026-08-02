@@ -66,8 +66,7 @@ STANDAARD_INSTELLINGEN = {
     # Toeslagen (%) — realistische standaardwaarden; blijven per bedrijf aanpasbaar
     # via Instellingen > Toeslagen.
     "toeslag_hoogte_pct": 10, "toeslag_spoed_pct": 20, "toeslag_buiten_pct": 10,
-    "toeslag_steiger_pct": 15, "toeslag_weekend_pct": 50, "toeslag_avond_pct": 25,
-    "toeslag_winter_pct": 10, "toeslag_reis_pct": 5,
+    "toeslag_weekend_pct": 50, "toeslag_avond_pct": 25, "toeslag_winter_pct": 10,
     # Offerte
     "offerte_prefix": "OFF", "offerte_startnummer": 1, "offerte_geldigheid": 30,
     "offerte_tekst": "", "voorwaarden": "",
