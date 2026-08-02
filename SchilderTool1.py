@@ -7821,18 +7821,34 @@ p._matLp={down:down,cancel:cancel,move:move,st:st};
                 proj_status = st.selectbox("Beginstatus" if not _ep else "Status", _status_opts,
                                            index=_status_opts.index(_status_bron) if _status_bron in _status_opts else 0)
 
+            # BUG-FIX (belangrijk): een bevroren project (offerte al verzonden) rekent
+            # met het vastgelegde prijs-snapshot, ongeacht latere marge/BTW-wijzigingen
+            # (zie _snapshot_actief). Zonder deze melding kon je hier marge/BTW aanpassen,
+            # "Project bijgewerkt!" zien verschijnen, en toch de klant het oude (bevroren)
+            # bedrag sturen — de wijziging had gewoon geen effect, zonder enig signaal.
+            _pj_bevroren = bool(_ep) and _snapshot_actief(_ep)
+            if _pj_bevroren:
+                ui_alert(
+                    "Dit project is bevroren (offerte al verzonden) — marge en BTW liggen "
+                    "vast op het bevroren bedrag en zijn hier niet meer aan te passen. Voeg "
+                    "een onderdeel of materieelregel toe (of verwijder er een) om de prijs "
+                    "opnieuw vast te leggen op nieuwe waarden.",
+                    "warning",
+                )
+
             fc3, fc4 = st.columns(2)
             with fc3:
                 _marge_bron = _ep.get("marge") if _ep else None
                 if _marge_bron is None:
                     _marge_bron = st.session_state.instellingen["standaard_marge"]
                 _marge_def = max(0, min(60, int(_marge_bron)))
-                proj_marge = st.slider("Winstmarge %", 0, 60, _marge_def)
+                proj_marge = st.slider("Winstmarge %", 0, 60, _marge_def, disabled=_pj_bevroren)
             with fc4:
                 _btw_cur = (_ep.get("btw") if _ep else None)
                 if _btw_cur is None:
                     _btw_cur = st.session_state.instellingen["standaard_btw"]
-                proj_btw = st.selectbox("BTW %", [0, 9, 21], index=[0, 9, 21].index(_btw_cur) if _btw_cur in [0, 9, 21] else 2)
+                proj_btw = st.selectbox("BTW %", [0, 9, 21], index=[0, 9, 21].index(_btw_cur) if _btw_cur in [0, 9, 21] else 2,
+                                        disabled=_pj_bevroren)
 
             proj_notities = st.text_area("Notities", value=(_ep.get("notities", "") if _ep else ""), placeholder="Extra informatie over dit project...")
 
@@ -7848,7 +7864,17 @@ p._matLp={down:down,cancel:cancel,move:move,st:st};
                 st.session_state["pj_goto_overzicht"] = True
                 st.rerun()
             if submitted:
-                if proj_naam and proj_adres and klant_opties:
+                # BUG-FIX (belangrijk): dit was een kale waarheidscheck (Python-truthy) —
+                # een projectnaam van één spatie of een adres van één letter kwam er zo
+                # doorheen en verscheen dan bijna-leeg op de offerte/factuur-PDF. Zelfde
+                # centrale validatielaag hergebruikt als Klanten/Personeel/Producten.
+                _pj_fout = eerste_validatiefout(
+                    valideer_tekst(proj_naam, "Projectnaam", min_len=2),
+                    valideer_tekst(proj_adres, "Projectadres", min_len=3, anti_gibberish=False),
+                )
+                if not _pj_fout and not klant_opties:
+                    _pj_fout = "Er bestaat nog geen klant — voeg eerst een klant toe."
+                if not _pj_fout:
                     if _ep:   # ── BEWERKEN: velden bijwerken; id/onderdelen/medewerkers/aangemaakt behouden ──
                         _ep["naam"]     = proj_naam
                         _ep["klant_id"] = klant_opties[klant_keuze]
@@ -7887,7 +7913,7 @@ p._matLp={down:down,cancel:cancel,move:move,st:st};
                         st.session_state["pj_goto_overzicht"] = True
                         st.rerun()
                 else:
-                    ui_alert("Vul alle verplichte velden in en zorg dat er minimaal één klant bestaat.", "error")
+                    ui_alert(_pj_fout, "error")
 
 # =====================================================
 # OFFERTES
