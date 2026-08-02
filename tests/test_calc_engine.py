@@ -101,6 +101,34 @@ def test_project_gescoped_product_telt_niet_mee_in_ander_project():
     assert r_eigen_project["materiaal"] > 0.0
 
 
+def test_snelle_calculatie_zonder_project_id_telt_alleen_globale_producten():
+    """Regressietest voor een kritieke audit-fix: zonder project_id (Snelle
+    Calculatie op de Calculaties-pagina) telde eerder de VOLLEDIGE productenpool
+    mee, inclusief producten die aan een specifiek ander project gekoppeld zijn.
+    Dat gaf een niet-verklaarbaar prijsverschil t.o.v. de eigenlijke
+    projectcalculatie. Nu telt zonder project_id uitsluitend een globaal product
+    (project_id=None) mee."""
+    producten = [
+        {"naam": "Globaal product", "prijs": 50.0, "inhoud": 10.0, "verbruik": 0.12,
+         "werkzaamheden": ["Muren schilderen"], "actief": True, "project_id": None},
+        {"naam": "Aan project 42 gekoppeld product", "prijs": 999.0, "inhoud": 10.0,
+         "verbruik": 0.12, "werkzaamheden": ["Muren schilderen"], "actief": True,
+         "project_id": 42},
+    ]
+    bereken_onderdeel = _maak_bereken_onderdeel(producten=producten, personeel=[])
+    ond = _basis_onderdeel(m2=20, lagen=1, werkzaamheden=["Muren schilderen"],
+                           arbeid_uren_override=0)
+
+    zonder_project_id = bereken_onderdeel(ond, marge_pct=0, btw_pct=0)   # Snelle Calculatie
+    alleen_globaal     = bereken_onderdeel(ond, marge_pct=0, btw_pct=0, project_id=999)
+
+    # Alleen het globale product (stukprijs 50/10=5) telt mee: 20*1*0.12*5 = 12.
+    assert zonder_project_id["materiaal"] == 12.0
+    # Zonder project_id moet dit exact gelijk zijn aan een calculatie voor een
+    # willekeurig ANDER project (999) — beide zien alleen de globale producten.
+    assert zonder_project_id["materiaal"] == alleen_globaal["materiaal"]
+
+
 # ── Toeslagen ─────────────────────────────────────────────────────────────
 def test_toeslag_hoogte_percentage():
     bereken_onderdeel = _maak_bereken_onderdeel(personeel=PERSONEEL)

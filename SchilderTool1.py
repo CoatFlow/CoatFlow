@@ -1067,12 +1067,16 @@ def bereken_onderdeel(onderdeel, marge_pct, btw_pct, project_id=None):
             continue
         # Projectkoppeling: binnen een project tellen alleen GLOBALE producten (zonder
         # project_id) én producten van dít project mee. Zonder project_id (Snelle
-        # Calculatie of oudere aanroep) blijft de volledige productenpool gelden — zo
-        # blijven bestaande, projectloze producten overal werken (geen regressie).
-        if project_id is not None:
-            _pp = product.get("project_id")
-            if _pp is not None and _pp != project_id:
-                continue
+        # Calculatie) tellen UITSLUITEND globale producten mee.
+        # BUG-FIX (belangrijk): dit gaf eerder, zonder project_id, de volledige
+        # productenpool vrij — inclusief producten gekoppeld aan een ANDER project.
+        # Snelle Calculatie kon zo onverklaarbaar duurder/goedkoper uitvallen dan de
+        # eigenlijke projectcalculatie, afhankelijk van wat toevallig aan een willekeurig
+        # ander project gekoppeld stond. Nu geldt overal dezelfde regel: een product
+        # telt mee als het globaal is, of gekoppeld is aan precies dít project.
+        _pp = product.get("project_id")
+        if _pp is not None and _pp != project_id:
+            continue
         for wz in product["werkzaamheden"]:
             if wz in werkzaamheden:
                 # `prijs` is de VERPAKKINGSprijs; ÷ inhoud → prijs per eenheid (liter/meter/vel…),
@@ -6790,13 +6794,14 @@ elif selected == "Projecten":
                                     ui_alert("Project gedupliceerd!")
                                     st.rerun()
                                 st.markdown('<hr style="margin:4px 0;border:none;border-top:1px solid #F1F5F9;"><span class="pj-del-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                                # BUG-FIX (belangrijk): verwijderde eerder DIRECT op één klik — de
+                                # zwaarste actie op deze pagina had de zwakste rem (een losse
+                                # onderdeel-regel binnen een project vereist wél een bevestiging).
+                                # Nu hetzelfde bevestigingspatroon als Klanten: knop zet alleen een
+                                # vlag, de daadwerkelijke verwijdering staat in het bevestigingsblok
+                                # verderop (zie pj_del_id).
                                 if st.button("🗑  Verwijderen", key=f"pj_del_{project['id']}", use_container_width=True):
-                                    st.session_state.projecten = [p for p in st.session_state.projecten if p["id"] != project["id"]]
-                                    if st.session_state.geselecteerd_project == project["id"]:
-                                        st.session_state.geselecteerd_project = None
-                                    prune_personeel_projectkoppelingen()   # SP-005
-                                    save_data()
-                                    ui_alert("Project verwijderd.")
+                                    st.session_state.pj_del_id = project["id"]
                                     st.rerun()
 
             # JS: popover compact + chevron verbergen
@@ -6849,6 +6854,48 @@ if(!p._pjPopWatching){
                     if st.button("Volgende →", key="pj_next", disabled=(_pj_pg >= _pj_totpg), use_container_width=True):
                         st.session_state.pj_pagina = _pj_pg + 1
                         st.rerun()
+
+        # ── Bevestiging projectverwijdering (zelfde patroon als Klanten) ──
+        # Buiten het if/else van 'gefilterd' geplaatst zodat een filter-/zoekwijziging
+        # tussen openen en bevestigen het bevestigingsblok niet kan laten verdwijnen.
+        if st.session_state.get("pj_del_id") is not None:
+            _del_project = next((p for p in st.session_state.projecten
+                                 if p["id"] == st.session_state.pj_del_id), None)
+            if _del_project:
+                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+                _del_klant_naam = get_klant_naam(_del_project.get("klant_id"))
+                _n_ond = len(_del_project.get("onderdelen") or [])
+                _ond_warn = (f" Dit project heeft <strong>{_n_ond} onderde{'el' if _n_ond == 1 else 'len'}</strong>"
+                            f" die {'wordt' if _n_ond == 1 else 'worden'} meeverwijderd." if _n_ond else "")
+                st.markdown(
+                    f'<div style="background:#FFF5F5;border:1px solid #FECACA;border-radius:12px;padding:16px 18px;">'
+                    f'<div style="font-size:14px;font-weight:700;color:#DC2626;margin-bottom:6px;">'
+                    f'<i class="bi bi-exclamation-triangle" style="margin-right:6px;"></i>Project verwijderen?</div>'
+                    f'<div style="font-size:13px;color:#374151;">Weet je zeker dat je <strong>{h(_del_project["naam"])}</strong>'
+                    f' ({h(_del_klant_naam)}) wilt verwijderen? Dit kan niet ongedaan worden gemaakt.{_ond_warn}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+                st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+                _pdc1, _pdc2, _ = st.columns([1, 1, 6])
+                with _pdc1:
+                    st.markdown('<span class="pj-del-confirm-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                    if st.button("Verwijderen", key="pj_del_confirm", type="primary", use_container_width=True):
+                        _del_id = _del_project["id"]
+                        st.session_state.projecten = [p for p in st.session_state.projecten if p["id"] != _del_id]
+                        if st.session_state.geselecteerd_project == _del_id:
+                            st.session_state.geselecteerd_project = None
+                        prune_personeel_projectkoppelingen()   # SP-005
+                        st.session_state.pj_del_id = None
+                        save_data()
+                        st.toast(f"Project '{_del_project['naam']}' verwijderd.")
+                        st.rerun()
+                with _pdc2:
+                    st.markdown('<span class="pj-del-cancel-mk" style="display:none;"></span>', unsafe_allow_html=True)
+                    if st.button("Annuleren", key="pj_del_cancel", use_container_width=True):
+                        st.session_state.pj_del_id = None
+                        st.rerun()
+            else:
+                st.session_state.pj_del_id = None
 
         # ── Detail view ──
         if st.session_state.geselecteerd_project:
@@ -8390,13 +8437,18 @@ elif selected == "Calculaties":
     result = bereken_onderdeel(onderdeel_calc, calc_marge, calc_btw)
     totaal_ref = result["incl_btw"] if result["incl_btw"] > 0 else 1
 
-    # Centrale invoervalidatie (beta-blocker): beperk onrealistische m²/meters/lagen.
+    # Centrale invoervalidatie (beta-blocker): beperk onrealistische m²/meters/lagen/uren.
     # Geldige invoer verandert niets aan de berekening; alleen onzin wordt geblokkeerd.
+    # BUG-FIX (belangrijk): Arbeidsuren ontbrak hier — Onderdeel toevoegen valideert dat
+    # veld al wel (max. 100.000 uur, "onrealistisch hoog"). Zonder deze check rekende
+    # Calculaties — de pagina die het vaakst live voor een klant wordt gebruikt — een
+    # tikfout in de uren zonder waarschuwing gewoon door.
     _calc_fout = eerste_validatiefout(
         valideer_getal(_eff_m2, "m2", "Oppervlakte (m²)"),
         valideer_getal(_eff_meters, "meters", "Lengte (m)"),
         valideer_getal(_eff_lagen, "lagen", "Aantal lagen", toestaan_nul=False),
         valideer_getal(_eff_hout_m2, "m2", "Houtwerk schilderoppervlak"),
+        valideer_getal(calc_uren, "uren", "Arbeidsuren"),
     )
     if (not _calc_fout and float(_eff_m2 or 0) <= 0 and float(_eff_meters or 0) <= 0
             and float(_eff_hout_m2 or 0) <= 0):
@@ -9778,7 +9830,11 @@ elif selected == "Producten":
                                                  use_container_width=True, type="primary")
 
             if _opslaan:
-                if p_naam and p_werkzaamheden and p_inhoud > 0:
+                # BUG-FIX (belangrijk): prijs ontbrak in deze guard — een product kon zo op
+                # €0,00 worden opgeslagen (bv. na een mislukte URL-import, die €0,00 als
+                # neutrale startwaarde zet) en produceerde daarna stil €0 materiaalkosten in
+                # elke calculatie die het gebruikt.
+                if p_naam and p_werkzaamheden and p_inhoud > 0 and p_prijs > 0:
                     nieuw_id = max((p["id"] for p in st.session_state.producten), default=0) + 1
                     # Slim verbruik: een st.form kan het veld niet live bijwerken terwijl je
                     # typt, dus verfijnen we bij het opslaan. Liet de gebruiker het veld op de
@@ -9808,7 +9864,7 @@ elif selected == "Producten":
                     st.session_state["pn_reset"] = True   # formulier leegmaken na toevoegen
                     st.rerun()
                 else:
-                    ui_alert("Vul naam, werkzaamheden en inhoud in.", "error")
+                    ui_alert("Vul naam, prijs, werkzaamheden en inhoud in.", "error")
             elif _annuleer:
                 st.session_state["pn_reset"] = True       # formulier leegmaken
                 st.rerun()
@@ -10454,6 +10510,13 @@ elif selected == "Personeel":
                         "actief":      m_status == "Actief",
                         "status":      m_status,
                         "notities":    m_notities,
+                        # BUG-FIX (belangrijk): deze twee velden werden al gerenderd en
+                        # uitgelezen (m_start/m_intern), maar ontbraken hier — de gebruiker
+                        # vulde ze in, verzond het formulier, en ze verdwenen stil zonder
+                        # foutmelding. str(m_start) i.p.v. het date-object zelf: anders
+                        # crasht json.dumps() bij het opslaan (geen default=str meegegeven).
+                        "startdatum":           str(m_start) if m_start else "",
+                        "interne_opmerkingen":  m_intern,
                         "algemeen":    m_algemeen,
                         # Algemeen → geen losse koppelingen nodig (telt overal mee).
                         "project_ids": [] if m_algemeen else m_project_ids,
