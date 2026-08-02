@@ -2244,7 +2244,16 @@ def _sjb_render_cached(cache_key, _project, soort):
 
 def get_document_bytes(project, soort):
     """Hét generatiepunt mét terugval: eigen sjabloon indien aanwezig, anders de
-    ingebouwde PDF. Return {'bytes','b64','ext','mime','sjabloon': bool}."""
+    ingebouwde PDF. Return {'bytes','b64','ext','mime','sjabloon': bool,
+    'sjabloon_mislukt': bool}.
+
+    BUG-FIX (belangrijk): 'sjabloon_mislukt' is alleen True als er wél een sjabloon
+    geconfigureerd is maar het renderen mislukte (exceptie of leeg resultaat) — dát
+    is het geval waar de aanroeper de gebruiker moet waarschuwen. Vroeger gaf 'sjabloon'
+    in beide gevallen gewoon False terug, dus kon een aanroeper "geen sjabloon
+    geconfigureerd" (normaal) niet onderscheiden van "sjabloon geconfigureerd maar
+    kapot" (onverwacht) — een bedrijf kon zo een onbranded PDF naar een klant sturen
+    zonder dat ook maar iemand het merkte."""
     sjb = sjabloon_ophalen(soort)
     if sjb:
         try:
@@ -2252,12 +2261,12 @@ def get_document_bytes(project, soort):
             r = _sjb_render_cached(_pdf_cache_key(project) + f"|sjb|{soort}|{versie}",
                                    project, soort)
             if r:
-                return dict(r, sjabloon=True)
+                return dict(r, sjabloon=True, sjabloon_mislukt=False)
         except Exception as e:
             print(f"[CoatFlow] Sjabloon-render mislukt ({soort}): {e} — terugval op ingebouwde PDF.")
     d = get_pdf_bytes(project) if soort == "offerte" else get_factuur_bytes(project)
     return {"bytes": d["bytes"], "b64": d["b64"], "ext": "pdf",
-            "mime": _SJB_MIME["pdf"], "sjabloon": False}
+            "mime": _SJB_MIME["pdf"], "sjabloon": False, "sjabloon_mislukt": bool(sjb)}
 
 
 def _render_sjabloon_kaart(soort):
@@ -6269,8 +6278,16 @@ obs.observe(window.parent.document.body,{childList:true,subtree:true});
         # ── Session state ──
         if "agenda_maand_offset" not in st.session_state:
             st.session_state.agenda_maand_offset = 0
-        if "agenda_taken" not in st.session_state:
-            # Voorbeelddata voor demo
+        # BUG-FIX (belangrijk): deze voorbeelddata was NIET gegated op _use_db(), anders
+        # dan de vergelijkbare demo-data voor producten/klanten/projecten/personeel/taken
+        # hierboven (regel ~731 e.v.). In de praktijk raakte dit geen echte Supabase-
+        # bedrijven — load_data() zet agenda_taken altijd op minstens {} (zowel bij een
+        # geslaagde load als, sinds de eerdere fix, bij een mislukte load) — maar zonder
+        # deze gate zou een toekomstig codepad waar agenda_taken per ongeluk ongezet
+        # blijft alsnog stil nepafspraken tonen. Nu consistent met de overige demo-data:
+        # uitsluitend in lokale JSON-modus (geen Supabase geconfigureerd).
+        if "agenda_taken" not in st.session_state and not _use_db():
+            # Voorbeelddata voor demo (uitsluitend lokale JSON-modus, zie hierboven)
             _demo_dag = str(date.today())
             st.session_state.agenda_taken = {
                 _demo_dag: [
@@ -6285,6 +6302,12 @@ obs.observe(window.parent.document.body,{childList:true,subtree:true});
                      "subtitel": "De Vries Bouw", "status": "Afspraak"},
                 ]
             }
+        # Veiligheidsnet: in Supabase-modus zet load_data() agenda_taken altijd op
+        # minstens {} (zowel bij een geslaagde load als bij een mislukte, zie de
+        # eerdere BUG-FIX in load_data()) — deze regel raakt daar dus normaal nooit aan.
+        # Puur een vangnet tegen een crash op agenda_taken.get(...) verderop mocht die
+        # garantie ooit ergens niet gelden; overschrijft nooit bestaande (echte) data.
+        st.session_state.setdefault("agenda_taken", {})
         if "agenda_geselecteerde_dag" not in st.session_state:
             st.session_state.agenda_geselecteerde_dag = str(date.today())
 
@@ -6977,6 +7000,17 @@ if(!p._pjPopWatching){
                                 _doc_fac = get_document_bytes(project, "factuur")
                                 st.session_state[f"_fact_bytes_{_pid}"] = _doc_fac["bytes"]
                                 st.session_state[f"_fact_ext_{_pid}"]   = _doc_fac["ext"]
+                                # BUG-FIX (belangrijk): eerder onzichtbaar — een kapot eigen
+                                # sjabloon viel stil terug op de ingebouwde PDF, zonder dat
+                                # iemand het zag (de klant kreeg dan onbewust een onbranded
+                                # document). Nu een expliciete waarschuwing bij precies dat
+                                # geval (niet bij "gewoon geen sjabloon geconfigureerd").
+                                if _doc_off.get("sjabloon_mislukt") or _doc_fac.get("sjabloon_mislukt"):
+                                    ui_alert(
+                                        "Je eigen sjabloon kon niet worden gebruikt — er is nu "
+                                        "de ingebouwde PDF gegenereerd (zonder je eigen huisstijl). "
+                                        "Controleer je sjabloon bij Instellingen → Offertes/Facturen.",
+                                        "warning")
                             except Exception as e:
                                 ui_alert(f"PDF fout: {e}", "error")
                         # Na 'PDF genereren': Offerte + Factuur naast elkaar; beide downloaden direct.
@@ -7982,9 +8016,20 @@ elif selected == "Offertes":
 
             # Document-bytes uit cache (alleen herberekend als project/sjabloon wijzigt).
             # get_document_bytes: eigen sjabloon indien aanwezig, anders de ingebouwde PDF.
+            _sjb_warn = ""
             try:
                 pdf_data = get_document_bytes(project, "offerte")
                 pdf_b64  = pdf_data["b64"]
+                # BUG-FIX (belangrijk): eerder onzichtbaar — een kapot eigen sjabloon viel
+                # stil terug op de ingebouwde PDF. Klein waarschuwingsicoon naast de link
+                # i.p.v. een volle banner, zodat de dichte lijst compact blijft.
+                if pdf_data.get("sjabloon_mislukt"):
+                    _sjb_warn = (
+                        '<span title="Eigen sjabloon mislukt — dit is de ingebouwde PDF, '
+                        'zonder je eigen huisstijl. Controleer je sjabloon bij Instellingen." '
+                        'style="color:#D97706;margin-right:4px;">'
+                        '<i class="bi bi-exclamation-triangle-fill" style="font-size:12px;"></i></span>'
+                    )
                 fname = f"offerte_{pid:04d}_{project['naam'].replace(' ', '_')}.{pdf_data['ext']}"
                 # Eén klik → offerte ÉN factuur (beide uit dezelfde projectgegevens). De
                 # factuur wordt meegedownload via een verborgen sibling-link die de offerte-
@@ -8041,7 +8086,7 @@ elif selected == "Offertes":
                   <div class="of-bedrag-incl">incl. BTW: {format_eur(calc['incl_btw'])}</div>
                 </div>
               </div>
-              {pdf_link}
+              {_sjb_warn}{pdf_link}
             </div>
             """, unsafe_allow_html=True)
 
@@ -10818,8 +10863,22 @@ elif selected == "Instellingen":
                     inst["linkedin"]  = st.text_input("LinkedIn", value=inst.get("linkedin",""), placeholder="linkedin.com/company/…")
 
             if _save("b"):
-                save_data()
-                st.toast("Bedrijfsgegevens opgeslagen!")
+                _bedrijf_fout = eerste_validatiefout(
+                    valideer_tekst(inst["bedrijfsnaam"], "Bedrijfsnaam", min_len=2),
+                    valideer_tekst(inst.get("kvk", ""), "KVK-nummer", min_len=8, anti_gibberish=False),
+                    valideer_tekst(inst["btw_nummer"], "BTW-nummer", min_len=8, anti_gibberish=False),
+                    valideer_tekst(inst["adres"], "Adres", min_len=3, anti_gibberish=False),
+                    valideer_postcode(inst.get("postcode", ""), verplicht=True),
+                    valideer_tekst(inst.get("plaats", ""), "Plaats", min_len=2),
+                    valideer_telefoon(inst["telefoon"], verplicht=True),
+                    valideer_email(inst["email"], verplicht=True),
+                    valideer_tekst(inst["iban"], "IBAN", min_len=15, anti_gibberish=False),
+                )
+                if _bedrijf_fout:
+                    ui_alert(_bedrijf_fout, "error")
+                else:
+                    save_data()
+                    st.toast("Bedrijfsgegevens opgeslagen!")
 
     # ══════════════════════════════════════════════════════
     # TAB 2 — FINANCIEEL
@@ -11544,11 +11603,54 @@ elif selected == "Admin":
                         lambda: _db.admin_set_status(_cid, "active", _uid),
                         "Account geactiveerd.")
             with _b3:
+                # BUG-FIX (belangrijk): vuurde eerder op één klik, zonder bevestiging —
+                # de zwaarste actie in de hele app (een betalend account opschorten)
+                # had zo de zwakste rem. Nu hetzelfde bevestigingspatroon als Klanten/
+                # Projecten: de knop zet alleen een vlag, de daadwerkelijke actie staat
+                # in het bevestigingsblok na de tabel (zie adm_deact_confirm_id).
                 if st.button("Deactiveren", key=f"adm_deact_{_u['id']}", use_container_width=True,
                              help="Account deactiveren", disabled=(not _cid or _st == "suspended")):
-                    _do_admin_action(
-                        lambda: _db.admin_set_status(_cid, "suspended", _uid),
-                        "Account gedeactiveerd.")
+                    st.session_state["adm_deact_confirm_id"] = _u["id"]
+                    st.rerun()
+
+        # ── Bevestiging account deactiveren ──
+        _deact_id = st.session_state.get("adm_deact_confirm_id")
+        if _deact_id is not None:
+            _deact_u = next((u for u in _ausers if u["id"] == _deact_id), None)
+            if _deact_u:
+                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:#FFF5F5;border:1px solid #FECACA;border-radius:12px;padding:16px 18px;">'
+                    f'<div style="font-size:14px;font-weight:700;color:#DC2626;margin-bottom:6px;">'
+                    f'<i class="bi bi-exclamation-triangle" style="margin-right:6px;"></i>Account deactiveren?</div>'
+                    f'<div style="font-size:13px;color:#374151;">Weet je zeker dat je het account van '
+                    f'<strong>{h(_deact_u.get("email") or "—")}</strong> ({h(_deact_u.get("company_naam") or "—")}) '
+                    f'wilt deactiveren? Deze gebruiker verliest direct toegang tot de app.</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+                st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+                _adc1, _adc2, _ = st.columns([1, 1, 6])
+                with _adc1:
+                    if st.button("Deactiveren", key="adm_deact_confirm", type="primary", use_container_width=True):
+                        try:
+                            _db.admin_set_status(_deact_u.get("company_id"), "suspended",
+                                                 st.session_state.get("user_id"))
+                            _admin_fetch_data.clear()
+                            st.session_state["adm_deact_confirm_id"] = None
+                            st.toast("Account gedeactiveerd.")
+                            st.rerun()
+                        except _db.DbError as _de:
+                            _adm_log.error("Admin-actie mislukt (%s): %s", _deact_u.get("email"), _de)
+                            st.toast(f"Mislukt: {_de}")
+                        except Exception as _ex:
+                            _adm_log.error("Admin-actie onverwachte fout (%s): %s", _deact_u.get("email"), _ex)
+                            st.toast("Er ging iets mis. Probeer het opnieuw.")
+                with _adc2:
+                    if st.button("Annuleren", key="adm_deact_cancel", use_container_width=True):
+                        st.session_state["adm_deact_confirm_id"] = None
+                        st.rerun()
+            else:
+                st.session_state["adm_deact_confirm_id"] = None
 
     st.markdown(
         '<div style="font-size:11.5px;color:#94A3B8;margin-top:18px;display:flex;align-items:center;gap:6px;">'

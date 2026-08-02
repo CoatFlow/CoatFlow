@@ -38,26 +38,17 @@ def _valid_uuid(v) -> bool:
 
 
 # ── clients ──────────────────────────────────────────────────────────────────
-_auth_cl = None
-
-
-def _auth_client():
-    """Anon-key client voor sign in/up/out (publieke auth-flows)."""
-    global _auth_cl
-    if _auth_cl is not None:
-        return _auth_cl
-    s = db._secrets()
-    if not s or not s.get("supabase_url"):
-        raise AuthError("Authenticatie is niet geconfigureerd.")
-    key = s.get("supabase_anon_key") or s.get("supabase_service_key")
-    if not key:
-        raise AuthError("Geen Supabase-sleutel gevonden in de configuratie.")
-    try:
-        from supabase import create_client
-        _auth_cl = create_client(s["supabase_url"], key)
-        return _auth_cl
-    except Exception as e:
-        raise AuthError(f"Kon de authenticatie-service niet bereiken: {e}")
+# BUG-FIX (belangrijk): sign_in/sign_up/reset_password/sign_out gebruikten een
+# GEDEELDE module-singleton client. Op Streamlit Cloud draaien gelijktijdige
+# gebruikers als threads in hetzelfde proces — de GoTrue-client houdt intern zijn
+# laatst-ingelogde sessie bij, dus een gedeelde client kan de sessie van de ene
+# gebruiker laten overschrijven door een andere. Vooral riskant bij sign_out():
+# cl.auth.sign_out() werkt dan op WELKE sessie de gedeelde client toevallig net
+# vasthield, niet per se die van de uitloggende gebruiker — mogelijk blijft het
+# echte token van iemand anders geldig. Alle vier de auth-acties gebruiken nu
+# _fresh_auth_client() (hieronder) — dezelfde per-aanroep-verse-client-aanpak die
+# try_restore_session al gebruikte — dus geen gedeelde state meer, geen singleton
+# nodig, geen race op de initialisatie.
 
 
 def is_active() -> bool:
@@ -257,7 +248,7 @@ def _clear_cookie_js():
 
 # ── publieke acties ──────────────────────────────────────────────────────────
 def sign_in(email: str, password: str):
-    cl = _auth_client()
+    cl = _fresh_auth_client()
     try:
         res = cl.auth.sign_in_with_password({"email": email, "password": password})
     except Exception as e:
@@ -272,7 +263,7 @@ def sign_in(email: str, password: str):
 
 
 def sign_up(email: str, password: str):
-    cl = _auth_client()
+    cl = _fresh_auth_client()
     try:
         res = cl.auth.sign_up({"email": email, "password": password})
     except Exception as e:
@@ -296,7 +287,7 @@ def sign_up(email: str, password: str):
 
 def reset_password(email: str):
     """Stuur een wachtwoord-reset mail via Supabase."""
-    cl = _auth_client()
+    cl = _fresh_auth_client()
     try:
         cl.auth.reset_password_for_email(email)
     except Exception as e:
@@ -305,7 +296,16 @@ def reset_password(email: str):
 
 def sign_out():
     try:
-        cl = _auth_client()
+        cl = _fresh_auth_client()
+        # De verse client heeft standaard GEEN actieve sessie — zonder die eerst te
+        # zetten weet sign_out() niet welk token het moet intrekken (de server-side
+        # revoke zou dan stil overgeslagen worden, ook al oogt lokaal alles prima).
+        # refresh_session (dezelfde aanroep die try_restore_session hieronder ook
+        # gebruikt) hydrateert de client met PRECIES de sessie van de uitloggende
+        # gebruiker, zodat sign_out() ook echt diens token intrekt.
+        refresh_token = st.session_state.get("_refresh_token")
+        if refresh_token:
+            cl.auth.refresh_session(refresh_token)
         cl.auth.sign_out()
     except Exception:
         pass  # lokale sessie hieronder altijd opruimen
