@@ -9425,7 +9425,7 @@ elif selected == "Producten":
         if pr_cat_filter != "Alle categorieën":
             prod_lijst = [p for p in prod_lijst if p.get("categorie", "Overig") == pr_cat_filter]
 
-        # Sorteren (categorie-volgorde als primaire sleutel)
+        # Sorteren (categorie-volgorde als primaire sleutel voor de naam-sortering)
         _CAT_IDX = {c: i for i, c in enumerate(["Verf", "Primer", "Kit", "Gereedschap", "Schuurpapier", "Behang", "Overig"])}
         def _cat_key(p): return _CAT_IDX.get(p.get("categorie", "Overig"), 99)
         if pr_sort == "Naam A–Z":
@@ -9433,9 +9433,12 @@ elif selected == "Producten":
         elif pr_sort == "Naam Z–A":
             prod_lijst = sorted(sorted(prod_lijst, key=lambda p: p["naam"], reverse=True), key=_cat_key)
         elif pr_sort == "Hoogste prijs":
-            prod_lijst = sorted(sorted(prod_lijst, key=lambda p: p["prijs"], reverse=True), key=_cat_key)
+            # BUG-FIX (klein): categorie mocht hier niet meesorteren — "Hoogste prijs"
+            # moet écht het duurste product bovenaan tonen, over categorieën heen,
+            # anders bleef een dure "Overig"-post onderaan staan.
+            prod_lijst = sorted(prod_lijst, key=lambda p: p["prijs"], reverse=True)
         elif pr_sort == "Laagste prijs":
-            prod_lijst = sorted(sorted(prod_lijst, key=lambda p: p["prijs"]), key=_cat_key)
+            prod_lijst = sorted(prod_lijst, key=lambda p: p["prijs"])
 
         # Paginatie berekening
         totaal_pr  = len(prod_lijst)
@@ -10848,8 +10851,19 @@ elif selected == "Instellingen":
                     inst["bedrijfskleur"] = st.color_picker("Bedrijfskleur / accentkleur", value=inst.get("bedrijfskleur","#2563EB"))
                     _logo_up = st.file_uploader("Bedrijfslogo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo_upload")
                     if _logo_up is not None:
-                        import base64 as _b64
-                        inst["logo_b64"] = _b64.b64encode(_logo_up.read()).decode()
+                        # BUG-FIX (klein): geen grootte-check op het logo — het wordt
+                        # base64 in de instellingen-blob gezet, die bij ELKE sessie/pagina
+                        # wordt meegeladen. Een groot bestand blaast dat onnodig op.
+                        # 2 MB is ruim voldoende voor een bedrijfslogo.
+                        _LOGO_MAX_BYTES = 2 * 1024 * 1024
+                        _logo_bytes = _logo_up.read()
+                        if len(_logo_bytes) > _LOGO_MAX_BYTES:
+                            ui_alert(
+                                f"Logo is te groot ({len(_logo_bytes) / 1024 / 1024:.1f} MB) — "
+                                "kies een afbeelding kleiner dan 2 MB.", "error")
+                        else:
+                            import base64 as _b64
+                            inst["logo_b64"] = _b64.b64encode(_logo_bytes).decode()
                     if inst.get("logo_b64"):
                         st.markdown('<div style="font-size:11px;color:#059669;margin-top:4px;">✓ Logo opgeslagen in sessie</div>', unsafe_allow_html=True)
 

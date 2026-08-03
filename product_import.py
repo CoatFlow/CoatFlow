@@ -165,8 +165,13 @@ def _haal_html(url, timeout=12, max_bytes=2_000_000):
             # server serverside naar een intern adres laten doorspringen.
             for _hop in range(_MAX_REDIRECTS + 1):
                 try:
+                    # BUG-FIX (klein, geheugenrisico): stream=True + hieronder een
+                    # begrensde iter_content-lees i.p.v. resp.text[:max_bytes] — dat
+                    # laatste kapte pas af NÁ het volledig binnenhalen van de response,
+                    # dus een kwaadaardige/kapotte pagina met een enorme body kon toch
+                    # het volledige ding in het geheugen trekken vóór de afkapping.
                     resp = requests.get(huidige_url, headers=headers, timeout=timeout,
-                                        allow_redirects=False)
+                                        allow_redirects=False, stream=True)
                 except requests.exceptions.Timeout:
                     fout = _FOUT_TRAAG
                     resp = None
@@ -189,15 +194,26 @@ def _haal_html(url, timeout=12, max_bytes=2_000_000):
                 return None, _FOUT_404
             if status >= 400:
                 return None, _FOUT_GENERIEK
+            # Begrensd lezen (stream=True hierboven): stop zodra max_bytes bereikt is,
+            # i.p.v. eerst de volledige (mogelijk enorme) body op te halen. resp.content/
+            # .text raken hier bewust NIET aan — die zouden de rest van de stream alsnog
+            # volledig inlezen.
+            raw = b""
+            for _chunk in resp.iter_content(chunk_size=65_536):
+                raw += _chunk
+                if len(raw) >= max_bytes:
+                    break
+            resp.close()
+            raw = raw[:max_bytes]
             # Zonder charset in de Content-Type-header kiest requests latin-1 →
-            # mojibake ('Ã«' i.p.v. 'ë'). Dan zelf detecteren, met utf-8 als vangnet.
-            ct = (resp.headers.get("content-type") or "").lower()
-            if "charset" not in ct:
-                try:
-                    resp.encoding = resp.apparent_encoding or "utf-8"
-                except Exception:
-                    resp.encoding = "utf-8"
-            tekst = (resp.text or "")[:max_bytes]
+            # mojibake ('Ã«' i.p.v. 'ë'). Header-charset gebruiken als die er is,
+            # anders utf-8 als vangnet (geen aparte content-sniffing meer nodig,
+            # want we hebben de body al als bytes in handen).
+            _enc = requests.utils.get_encoding_from_headers(resp.headers) or "utf-8"
+            try:
+                tekst = raw.decode(_enc, errors="replace")
+            except (LookupError, TypeError):
+                tekst = raw.decode("utf-8", errors="replace")
             if not tekst.strip():
                 return None, _FOUT_GENERIEK        # lege pagina
             return tekst, None

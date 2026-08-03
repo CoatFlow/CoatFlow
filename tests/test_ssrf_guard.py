@@ -70,7 +70,7 @@ def test_redirect_naar_intern_adres_wordt_geblokkeerd_voor_de_tweede_hop(monkeyp
 
     calls = []
 
-    def fake_get(url, headers=None, timeout=None, allow_redirects=None):
+    def fake_get(url, headers=None, timeout=None, allow_redirects=None, stream=None):
         calls.append(url)
         if url == "https://leverancier.nl/product":
             return FakeResp(302, headers={"Location": "http://169.254.169.254/geheim"})

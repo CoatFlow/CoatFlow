@@ -117,7 +117,12 @@ def _ensure_company(user_id: str, email: str) -> str:
     except AuthError:
         raise
     except Exception as e:
-        raise AuthError(f"Kon het bedrijf niet aan je account koppelen: {e}")
+        # BUG-FIX (klein): de rauwe database-exceptie ({e}) lekte hiervoor rechtstreeks
+        # naar het registratiescherm — een technische Postgres/Supabase-foutmelding voor
+        # een net-aangemelde gebruiker. Nu naar de serverlog (Manage app → Logs) en een
+        # vriendelijke Nederlandse melding naar de gebruiker, zoals overal elders.
+        print(f"[CoatFlow] Kon bedrijf niet koppelen aan gebruiker {user_id}: {e}", flush=True)
+        raise AuthError("Kon het bedrijf niet aan je account koppelen. Probeer het later opnieuw.")
 
 
 def _friendly(err: Exception) -> str:
