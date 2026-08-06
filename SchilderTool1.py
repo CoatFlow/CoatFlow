@@ -5713,13 +5713,15 @@ if selected == "Dashboard":
         _onb_stappen = [
             ("1", '<span class="cf-onb-step-ic"><i class="bi bi-building"></i></span>Bedrijfsgegevens &amp; Template',
              'Vul je bedrijfsgegevens in via <span class="cf-onb-path">Instellingen → Bedrijfsgegevens</span> '
-             'en upload je eigen Word-template via <span class="cf-onb-path">Offertes &amp; Facturen</span>.'),
+             'en upload optioneel je eigen Word-template via <span class="cf-onb-path">Offertes &amp; Facturen</span> '
+             '(niet verplicht — zonder eigen template gebruiken we een ingebouwde PDF).'),
             ("2", '<span class="cf-onb-step-ic"><i class="bi bi-person"></i></span>Klant &amp; Project aanmaken',
              'Voeg eerst een klant toe via <span class="cf-onb-path">Klanten → Nieuwe klant</span> '
              'en maak daarna een project via <span class="cf-onb-path">Projecten → Nieuw project</span>.'),
-            ("3", '<span class="cf-onb-step-ic"><i class="bi bi-box-seam"></i></span>Producten &amp; Onderdelen',
-             'Voeg je materialen toe via <span class="cf-onb-path">Producten → Nieuw product</span> '
-             'en voeg de ruimtes/onderdelen toe via <span class="cf-onb-path">Projecten → Bekijken</span>.'),
+            ("3", '<span class="cf-onb-step-ic"><i class="bi bi-box-seam"></i></span>Producten &amp; Personeel',
+             'Voeg je materialen toe via <span class="cf-onb-path">Producten → Nieuw product</span>, je medewerkers via '
+             '<span class="cf-onb-path">Personeel → Nieuw personeelslid</span> en voeg de ruimtes/onderdelen toe via '
+             '<span class="cf-onb-path">Projecten → Bekijken</span>.'),
             ("4", '<span class="cf-onb-step-ic"><i class="bi bi-file-earmark-text"></i></span>PDF genereren',
              'Klik op <span class="cf-onb-path">PDF genereren</span> en kies <strong>Offerte</strong> '
              'of <strong>Factuur</strong> om direct een professioneel document te downloaden.'),
